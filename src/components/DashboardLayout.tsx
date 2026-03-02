@@ -13,7 +13,6 @@ import {
   SidebarProvider,
   SidebarTrigger,
 } from "@/components/ui/sidebar";
-import { NavLink } from "@/components/NavLink";
 import { Button } from "@/components/ui/button";
 import ThemeToggle from "@/components/ThemeToggle";
 
@@ -70,10 +69,11 @@ const DashboardLayout = ({ children, navItems, role }: DashboardLayoutProps) => 
                         isActive={location.pathname === item.url}
                         tooltip={item.title}
                       >
-                        <NavLink to={item.url} activeClassName="bg-sidebar-accent text-primary font-medium">
+                        {/* Replaced NavLink with standard Link here */}
+                        <Link to={item.url}>
                           <item.icon className="h-4 w-4" />
                           <span>{item.title}</span>
-                        </NavLink>
+                        </Link>
                       </SidebarMenuButton>
                     </SidebarMenuItem>
                   ))}
