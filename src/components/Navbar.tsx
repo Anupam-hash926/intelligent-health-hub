@@ -2,7 +2,7 @@ import { Link } from "react-router-dom";
 import { Activity, Menu, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useState } from "react";
-
+import ThemeToggle from "@/components/ThemeToggle";
 const Navbar = () => {
   const [mobileOpen, setMobileOpen] = useState(false);
 
@@ -22,6 +22,7 @@ const Navbar = () => {
           <a href="#features" className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors">Features</a>
           <a href="#about" className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors">About</a>
           <a href="#contact" className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors">Contact</a>
+          <ThemeToggle />
           <Link to="/login">
             <Button size="sm">Login Portal</Button>
           </Link>

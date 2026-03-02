@@ -4,7 +4,7 @@ import { Activity, Mail, Lock, ArrowRight, User, Stethoscope, ShieldCheck } from
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 
 type Role = "patient" | "doctor" | "admin";
@@ -19,6 +19,7 @@ const Login = () => {
   const [selectedRole, setSelectedRole] = useState<Role>("patient");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const navigate = useNavigate();
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -26,9 +27,12 @@ const Login = () => {
       toast.error("Please fill in all fields");
       return;
     }
+    localStorage.setItem("user_role", selectedRole);
     toast.success(`Logged in as ${selectedRole}: ${email}`, {
       description: "Redirecting to your dashboard...",
     });
+    const routes: Record<Role, string> = { patient: "/patient", doctor: "/doctor", admin: "/admin" };
+    setTimeout(() => navigate(routes[selectedRole]), 500);
   };
 
   return (
