@@ -8,13 +8,11 @@ from dotenv import load_dotenv
 load_dotenv()
 DB_URL = os.getenv("DATABASE_URL")
 
-router = APIRouter()
+router = APIRouter(prefix="/api/patients", tags=["Patient Data"])
 
 # ==========================================
 # DSA CONCEPT: Hashing / In-Memory Caching O(1)
 # ==========================================
-# We use a global Python dictionary to simulate a Redis cache.
-# This allows instant retrieval without hitting the database.
 patient_cache = {}
 
 def get_db_connection():
@@ -32,7 +30,7 @@ def get_patient_history(patient_id: int):
             "data": patient_cache[patient_id]
         }
 
-    # STEP 2: Cache Miss. Query the Database (O(log N) Time Complexity via B+ Tree Index)
+    # STEP 2: Cache Miss. Query the REAL Database
     print(f"🔍 CACHE MISS: Querying PostgreSQL for patient {patient_id}...")
     conn = None
     cursor = None
@@ -40,10 +38,9 @@ def get_patient_history(patient_id: int):
         conn = get_db_connection()
         cursor = conn.cursor()
         
-        # This query is lightning fast because we added the B+ Tree index 
-        # to the patient_id column in Phase 2!
+        # Querying your real medical_records table
         cursor.execute("""
-            SELECT record_id, diagnosis, prescription, visit_date 
+            SELECT record_id, diagnosis, prescription, visit_date AS date 
             FROM medical_records 
             WHERE patient_id = %s
             ORDER BY visit_date DESC;
@@ -51,11 +48,13 @@ def get_patient_history(patient_id: int):
         
         records = cursor.fetchall()
         
+        # If the database is empty, we don't throw an error! We just return an empty list.
         if not records:
-            raise HTTPException(status_code=404, detail="No medical records found for this patient.")
-
-        # STEP 3: Save to cache so the next request is O(1)
-        patient_cache[patient_id] = records
+            print("Database checked, but no records exist for this patient yet.")
+            records = []
+        else:
+            # Only save to cache if we actually found real data
+            patient_cache[patient_id] = records
         
         return {
             "retrieval_speed": "O(log N) Logarithmic Time",
@@ -64,10 +63,12 @@ def get_patient_history(patient_id: int):
             "data": records
         }
     
-    except Exception as e:
+    except psycopg2.Error as e:
+        # This will only trigger if your table is missing or DB is offline
+        print(f"Database Error: {e}")
         if conn:
             conn.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"Database error: {e}")
     finally:
         if cursor:
             cursor.close()
