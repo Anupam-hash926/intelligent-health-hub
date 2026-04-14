@@ -29,10 +29,21 @@ def get_all_appointments():
         # 2. Casts no_show_risk to Float
         # 3. Uses COALESCE to fallback to "Mock Patient XXXX" if they aren't a real registered user
         # 4. Uses ILIKE to catch any capitalization of "scheduled"
+        # 5. Added a CASE statement to map doctor_id to doctor_name dynamically
         query = """
             SELECT 
                 a.appointment_id, 
                 a.patient_id, 
+                a.doctor_id,
+                CASE 
+                    WHEN a.doctor_id = '1' THEN 'Sarah Chen'
+                    WHEN a.doctor_id = '2' THEN 'James Wilson'
+                    WHEN a.doctor_id = '3' THEN 'Emily Park'
+                    WHEN a.doctor_id = '4' THEN 'Michael Ross'
+                    WHEN a.doctor_id = '5' THEN 'Robert King'
+                    WHEN a.doctor_id = '6' THEN 'Lisa Cuddy'
+                    ELSE 'ID: ' || a.doctor_id 
+                END as doctor_name,
                 CAST(a.appointment_time AS TEXT) as appointment_time, 
                 a.status, 
                 CAST(a.no_show_risk AS FLOAT) as no_show_risk, 

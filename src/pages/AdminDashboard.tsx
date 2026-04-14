@@ -15,7 +15,7 @@ import { Label } from "@/components/ui/label";
 
 const navItems = [
   { title: "Overview", url: "/admin", icon: LayoutDashboard },
-  { title: "AI Triage", url: "/admin/triage", icon: Brain }, // --- NEW: AI Triage Tab ---
+  { title: "AI Triage", url: "/admin/triage", icon: Brain }, 
   { title: "Bed Management", url: "/admin/beds", icon: BedDouble },
   { title: "Directory", url: "/admin/directory", icon: Users },
 ];
@@ -225,7 +225,7 @@ const AdminDashboard = () => {
         <div className="flex gap-2 border-b border-border pb-2 overflow-x-auto">
           {[
             { key: "overview" as const, label: "Overview", icon: LayoutDashboard, path: "/admin" },
-            { key: "triage" as const, label: "AI Triage", icon: Brain, path: "/admin/triage" }, // --- NEW TAB ---
+            { key: "triage" as const, label: "AI Triage", icon: Brain, path: "/admin/triage" }, 
             { key: "beds" as const, label: "Bed Management", icon: BedDouble, path: "/admin/beds" },
             { key: "directory" as const, label: "Master Directory", icon: Users, path: "/admin/directory" },
           ].map((tab) => (
@@ -250,7 +250,7 @@ const AdminDashboard = () => {
                 { icon: Users, label: "Total Patients", value: totalPatients.toString(), color: "text-primary" },
                 { icon: Stethoscope, label: "Available Doctors", value: availableDoctors.toString(), color: "text-accent" },
                 { icon: BedDouble, label: "Free Beds", value: `${freeBeds}/${beds.length}`, color: "text-success" },
-                { icon: Brain, label: "Pending AI Triage", value: appointments.length.toString(), color: "text-warning", special: true }, // Updated to show actual pending appointments!
+                { icon: Brain, label: "Pending AI Triage", value: appointments.length.toString(), color: "text-warning", special: true }, 
               ].map((stat) => (
                 <Card key={stat.label} className={`border-border ${stat.special ? "ring-1 ring-warning/30" : ""}`}>
                   <CardContent className="p-4 flex items-center gap-3">
@@ -316,7 +316,8 @@ const AdminDashboard = () => {
                           </div>
                           <div className="flex items-center gap-1.5">
                             <Stethoscope className="h-4 w-4" />
-                            <span>Dr. {apt.doctor_id}</span>
+                            {/* UPDATED: Displays dynamic doctor name from the backend */}
+                            <span>Dr. {apt.doctor_name || apt.doctor_id}</span>
                           </div>
                         </div>
                       </div>

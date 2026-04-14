@@ -84,14 +84,30 @@ def get_patient_appointments(patient_id: str):
         conn = get_db_connection()
         cursor = conn.cursor()
         
-        # Formatted to perfectly match your React History cards!
+        # Updated to dynamically map IDs to names and departments!
         query = """
             SELECT 
                 appointment_id as id, 
                 CAST(appointment_time AS TEXT) as date, 
                 status, 
-                'Dr. ' || doctor_id as doctor, 
-                'General' as department, 
+                CASE 
+                    WHEN doctor_id = '1' THEN 'Dr. Sarah Chen'
+                    WHEN doctor_id = '2' THEN 'Dr. James Wilson'
+                    WHEN doctor_id = '3' THEN 'Dr. Emily Park'
+                    WHEN doctor_id = '4' THEN 'Dr. Michael Ross'
+                    WHEN doctor_id = '5' THEN 'Dr. Robert King'
+                    WHEN doctor_id = '6' THEN 'Dr. Lisa Cuddy'
+                    ELSE 'Dr. ' || doctor_id 
+                END as doctor, 
+                CASE 
+                    WHEN doctor_id = '1' THEN 'Cardiology'
+                    WHEN doctor_id = '2' THEN 'General Medicine'
+                    WHEN doctor_id = '3' THEN 'Orthopedics'
+                    WHEN doctor_id = '4' THEN 'Dermatology'
+                    WHEN doctor_id = '5' THEN 'Neurology'
+                    WHEN doctor_id = '6' THEN 'Pediatrics'
+                    ELSE 'General'
+                END as department, 
                 'Consultation' as diagnosis
             FROM appointments 
             WHERE patient_id = %s 
