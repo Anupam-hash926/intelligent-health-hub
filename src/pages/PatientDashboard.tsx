@@ -12,6 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { toast } from "sonner"; 
 
 import EmergencyLocator from "@/components/EmergencyLocator";
 
@@ -41,7 +42,6 @@ const PatientDashboard = () => {
   const location = useLocation();
   const navigate = useNavigate();
   
-  // --- NEW: Grab the Real Logged-In User ---
   const { currentUser } = useAuth();
 
   const [activeTab, setActiveTab] = useState<"history" | "appointment" | "profile" | "emergency">("history");
@@ -51,7 +51,6 @@ const PatientDashboard = () => {
   const [selectedTime, setSelectedTime] = useState("");
   const [bookingState, setBookingState] = useState<"idle" | "checking" | "confirmed" | "alternate">("idle");
 
-  // --- COMPREHENSIVE PROFILE STATES ---
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
@@ -61,7 +60,6 @@ const PatientDashboard = () => {
   const [profileMessage, setProfileMessage] = useState("");
   const [isSavingProfile, setIsSavingProfile] = useState(false);
 
-  // History States
   const [historyData, setHistoryData] = useState<any[]>([]);
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
 
@@ -73,13 +71,11 @@ const PatientDashboard = () => {
     else setActiveTab("history");
   }, [location.pathname]);
 
-  // Fetch History OR Profile based on active tab
   useEffect(() => {
     if (!currentUser?.uid) return;
 
     if (activeTab === "history") {
       setIsLoadingHistory(true);
-      // --- NEW FIX: Fetching straight from the appointments table! ---
       fetch(`http://127.0.0.1:8000/api/appointments/patient/${currentUser.uid}`)
         .then(res => res.json())
         .then(data => setHistoryData(data.data && data.data.length > 0 ? data.data : medicalHistory))
@@ -107,10 +103,14 @@ const PatientDashboard = () => {
       (h.department && h.department.toLowerCase().includes(searchQuery.toLowerCase()))
   );
 
-  // --- SAVE PROFILE LOGIC ---
   const handleSaveProfile = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentUser?.uid) return;
+
+    if (phone.length !== 9) {
+      setProfileMessage("Error: Phone number must be exactly 9 digits.");
+      return;
+    }
 
     setIsSavingProfile(true);
     try {
@@ -135,13 +135,12 @@ const PatientDashboard = () => {
     }
   };
 
-  // --- BOOKING LOGIC (AI Hidden from User) ---
   const handleBookAppointment = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentUser?.uid) return;
     
     if (!dob || !patientDistance) {
-      alert("Please complete your Medical Profile (DOB & Distance) before booking so we can optimize your appointment.");
+      toast.error("Please complete your profile first.");
       navigate("/patient/profile");
       return;
     }
@@ -153,7 +152,6 @@ const PatientDashboard = () => {
       const appointmentDate = new Date(selectedDate);
       const leadTimeDays = Math.ceil(Math.abs(appointmentDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
 
-      // 1. Ask the AI first...
       const mlResponse = await fetch(`http://127.0.0.1:8000/api/ml/${currentUser.uid}/predict-noshow`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -165,15 +163,9 @@ const PatientDashboard = () => {
       setTimeout(async () => {
         try {
           const combinedDateTime = `${selectedDate} ${selectedTime}`; 
-          
-          // --- NEW: Map the department to the correct doctor in the database! ---
           const deptToDoctorMap: Record<string, string> = {
-            "Cardiology": "1",
-            "General Medicine": "2",
-            "Orthopedics": "3",
-            "Dermatology": "4",
-            "Neurology": "5",
-            "Pediatrics": "6",
+            "Cardiology": "1", "General Medicine": "2", "Orthopedics": "3",
+            "Dermatology": "4", "Neurology": "5", "Pediatrics": "6",
           };
           const assignedDoctorId = deptToDoctorMap[selectedDept] || "1";
 
@@ -182,7 +174,7 @@ const PatientDashboard = () => {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               patient_id: currentUser.uid,
-              doctor_id: assignedDoctorId, // <--- NOW IT USES THE DYNAMIC ID!
+              doctor_id: assignedDoctorId,
               appointment_time: combinedDateTime,
               status: "scheduled",
               priority_score: 1, 
@@ -190,11 +182,9 @@ const PatientDashboard = () => {
             })
           });
 
-          // ALWAYS show confirmed to the patient. The AI risk is secretly sent to Admin!
           setBookingState("confirmed");
-          
         } catch (err) {
-          console.error("Failed to save booking to DB");
+          console.error("Failed to save booking");
         }
       }, 2000);
     } catch (error) {
@@ -241,18 +231,16 @@ const PatientDashboard = () => {
           ))}
         </div>
 
-        {/* --- COMPREHENSIVE PROFILE TAB --- */}
         {activeTab === "profile" && (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="max-w-3xl">
-            <Card className="border-border">
+            <Card className="border-border shadow-sm">
               <CardHeader>
                 <CardTitle>Medical Profile Settings</CardTitle>
-                <CardDescription>Keep your information updated. This helps our system optimize your scheduling.</CardDescription>
+                <CardDescription>Enter realistic data to ensure accurate AI triage and scheduling.</CardDescription>
               </CardHeader>
               <CardContent>
                 <form onSubmit={handleSaveProfile} className="space-y-6">
                   
-                  {/* Personal Info Section */}
                   <div className="space-y-4">
                     <h3 className="text-sm font-semibold text-foreground border-b pb-2">Personal Information</h3>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -270,14 +258,25 @@ const PatientDashboard = () => {
                         <Input 
                           type="date" 
                           value={dob} 
-                          onChange={(e) => setDob(e.target.value)} 
+                          min="1900-01-01"
+                          max={new Date().toISOString().split("T")[0]}
+                          onChange={(e) => {
+                            const selectedDob = new Date(e.target.value);
+                            const today = new Date();
+                            let calculatedAge = today.getFullYear() - selectedDob.getFullYear();
+                            
+                            if (calculatedAge > 125) {
+                              toast.error("Please enter a realistic Date of Birth (Max age: 125)");
+                              return;
+                            }
+                            setDob(e.target.value);
+                          }} 
                           required 
                         />
                       </div>
                     </div>
                   </div>
 
-                  {/* Contact & Location Section */}
                   <div className="space-y-4 pt-2">
                     <h3 className="text-sm font-semibold text-foreground border-b pb-2">Contact & Location</h3>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -285,7 +284,6 @@ const PatientDashboard = () => {
                         <Label>Email Address</Label>
                         <Input 
                           type="email" 
-                          placeholder="john@example.com" 
                           value={email} 
                           onChange={(e) => setEmail(e.target.value)} 
                           required 
@@ -295,22 +293,37 @@ const PatientDashboard = () => {
                         <Label>Phone Number</Label>
                         <Input 
                           type="tel" 
-                          placeholder="(555) 000-0000" 
+                          placeholder="123456789"
                           value={phone} 
-                          onChange={(e) => setPhone(e.target.value)} 
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            if (/^\d*$/.test(val) && val.length <= 9) {
+                              setPhone(val);
+                            }
+                          }} 
                           required 
                         />
+                        <p className="text-xs text-muted-foreground mt-1">Must be exactly 9 digits.</p>
                       </div>
                       <div className="space-y-2 md:col-span-2">
-                        <Label>Distance to Preferred Hospital (miles)</Label>
+                        <Label>Distance to Hospital (miles)</Label>
                         <Input 
                           type="number" 
                           placeholder="e.g. 15" 
                           value={patientDistance} 
-                          onChange={(e) => setPatientDistance(parseInt(e.target.value) || "")} 
+                          min="0"
+                          max="500"
+                          onChange={(e) => {
+                            const val = parseFloat(e.target.value);
+                            if (val > 500) {
+                              toast.error("Distance cannot exceed 500 miles.");
+                              return;
+                            }
+                            setPatientDistance(val || "");
+                          }} 
                           required 
                         />
-                        <p className="text-xs text-muted-foreground mt-1">Used to provide optimal travel buffer times.</p>
+                        <p className="text-xs text-muted-foreground mt-1">Maximum allowed distance for triage is 500 miles.</p>
                       </div>
                     </div>
                   </div>
@@ -321,7 +334,7 @@ const PatientDashboard = () => {
                       Save Profile Changes
                     </Button>
                     {profileMessage && (
-                      <span className={`text-sm font-medium animate-in fade-in ${profileMessage.includes("Error") ? "text-destructive" : "text-success"}`}>
+                      <span className={`text-sm font-medium ${profileMessage.includes("Error") ? "text-destructive" : "text-success"}`}>
                         {profileMessage}
                       </span>
                     )}
@@ -332,16 +345,13 @@ const PatientDashboard = () => {
           </motion.div>
         )}
 
-        {/* --- APPOINTMENT TAB --- */}
         {activeTab === "appointment" && (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
             <AnimatePresence mode="wait">
               {bookingState === "idle" && (
                 <motion.form key="form" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onSubmit={handleBookAppointment} className="max-w-2xl space-y-6">
                   <Card className="border-border">
-                    <CardHeader>
-                      <CardTitle className="text-lg">Schedule New Appointment</CardTitle>
-                    </CardHeader>
+                    <CardHeader><CardTitle className="text-lg">Schedule New Appointment</CardTitle></CardHeader>
                     <CardContent className="space-y-5">
                       <div className="space-y-2">
                         <Label>Department</Label>
@@ -352,7 +362,7 @@ const PatientDashboard = () => {
                       </div>
                       <div className="space-y-2">
                         <Label>Preferred Date</Label>
-                        <Input type="date" value={selectedDate} onChange={(e) => setSelectedDate(e.target.value)} min="2026-03-02" required />
+                        <Input type="date" value={selectedDate} onChange={(e) => setSelectedDate(e.target.value)} min={new Date().toISOString().split("T")[0]} required />
                       </div>
                       <div className="space-y-2">
                         <Label>Time Slot</Label>
@@ -371,114 +381,39 @@ const PatientDashboard = () => {
                   </Card>
                 </motion.form>
               )}
-
               {bookingState === "checking" && (
-                <motion.div key="checking" initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0 }} className="max-w-md mx-auto text-center py-16">
-                  <Loader2 className="h-12 w-12 animate-spin text-primary mx-auto mb-4" />
-                  <h3 className="text-xl font-display font-bold text-foreground mb-2">Processing Request...</h3>
-                  <p className="text-muted-foreground text-sm">Finding the best available slot</p>
-                </motion.div>
+                <div className="max-w-md mx-auto text-center py-16"><Loader2 className="h-12 w-12 animate-spin text-primary mx-auto mb-4" /><h3 className="text-xl font-bold">Processing...</h3></div>
               )}
-
               {bookingState === "confirmed" && (
-                <motion.div key="confirmed" initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="max-w-md mx-auto text-center py-16">
-                  <div className="h-16 w-16 rounded-full bg-success/10 flex items-center justify-center mx-auto mb-4"><Check className="h-8 w-8 text-success" /></div>
-                  <h3 className="text-xl font-display font-bold text-foreground mb-2">Booking Confirmed!</h3>
-                  <p className="text-muted-foreground text-sm">{selectedDept} · {selectedDate} · {selectedTime}</p>
-                  <Button variant="outline" className="mt-6 w-full" onClick={resetBooking}>Book Another</Button>
-                </motion.div>
-              )}
-
-              {/* Note: This alternate UI is kept around just in case you want to use it for something else later, but it won't fire anymore! */}
-              {bookingState === "alternate" && (
-                <motion.div key="alternate" initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="max-w-md mx-auto text-center py-16">
-                  <div className="h-16 w-16 rounded-full bg-warning/10 flex items-center justify-center mx-auto mb-4"><AlertTriangle className="h-8 w-8 text-warning" /></div>
-                  <h3 className="text-xl font-display font-bold text-foreground mb-2">Alternate Time Suggested</h3>
-                  <p className="text-muted-foreground text-sm mb-1">Your requested slot is high risk. We suggest:</p>
-                  <p className="font-semibold text-foreground">{selectedDept} · {selectedDate} · 03:00 PM</p>
-                  <div className="flex gap-3 justify-center mt-6">
-                    <Button variant="hero" onClick={() => setBookingState("confirmed")}>Accept Alternate</Button>
-                    <Button variant="outline" onClick={resetBooking}>Try Another</Button>
-                  </div>
-                </motion.div>
+                <div className="max-w-md mx-auto text-center py-16"><div className="h-16 w-16 rounded-full bg-success/10 flex items-center justify-center mx-auto mb-4"><Check className="h-8 w-8 text-success" /></div><h3 className="text-xl font-bold">Confirmed!</h3><Button variant="outline" className="mt-6 w-full" onClick={resetBooking}>Back</Button></div>
               )}
             </AnimatePresence>
           </motion.div>
         )}
 
-        {/* --- HISTORY TAB (WITH NEW WARNING FEATURE!) --- */}
         {activeTab === "history" && (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-4">
-            {isLoadingHistory ? (
-               <div className="flex justify-center p-8 text-primary animate-pulse">
-                 <Loader2 className="h-8 w-8 animate-spin mr-2" />
-                 <span className="text-lg font-medium">Fetching records...</span>
-               </div>
-            ) : (
+             {isLoadingHistory ? <Loader2 className="animate-spin mx-auto mt-10" /> : 
               <div className="grid gap-3">
-                {filteredHistory.map((record) => {
-                  
-                  // --- NEW: CATCH ADMIN DISMISSALS ---
-                  if (record.status === "reschedule_requested") {
-                    return (
-                      <Card key={record.record_id || record.id} className="border-destructive bg-destructive/5">
-                        <CardContent className="p-4">
-                          <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
-                            <div className="flex items-start gap-3">
-                              <div className="h-10 w-10 rounded-lg bg-destructive/10 flex items-center justify-center shrink-0 mt-0.5">
-                                <AlertTriangle className="h-5 w-5 text-destructive" />
-                              </div>
-                              <div>
-                                <p className="font-bold text-destructive">Action Required: Reschedule Needed</p>
-                                <p className="text-sm text-foreground mt-1">
-                                  Our system has found the appointment scheduled for <span className="font-bold">{record.department || "General"}</span> as a high no-show risk. Please reschedule.
-                                </p>
-                              </div>
-                            </div>
-                            <Button variant="outline" className="border-destructive text-destructive hover:bg-destructive/10 whitespace-nowrap" onClick={() => setActiveTab("appointment")}>
-                              Reschedule Now
-                            </Button>
-                          </div>
-                        </CardContent>
-                      </Card>
-                    );
-                  }
-
-                  // Default view for normal records
-                  return (
-                    <Card key={record.record_id || record.id} className="border-border">
-                      <CardContent className="p-4">
-                        <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
-                          <div className="flex items-start gap-3">
-                            <div className="h-10 w-10 rounded-lg bg-secondary flex items-center justify-center shrink-0 mt-0.5">
-                              <Stethoscope className="h-5 w-5 text-primary" />
-                            </div>
-                            <div>
-                              <p className="font-semibold text-foreground">{record.diagnosis || "Consultation"}</p>
-                              <p className="text-sm text-muted-foreground">{record.doctor || "General Hospital"} · {record.department || "General"}</p>
-                            </div>
-                          </div>
-                          <div className="flex items-center gap-3 md:flex-col md:items-end">
-                            <Badge variant={record.status === 'scheduled' || record.status === 'confirmed' ? 'default' : 'secondary'}>
-                              {record.status || "Completed"}
-                            </Badge>
-                            <span className="text-xs text-muted-foreground">{record.date || record.appointment_time}</span>
-                          </div>
-                        </div>
-                      </CardContent>
-                    </Card>
-                  );
-                })}
+                {filteredHistory.map((record) => (
+                   record.status === "reschedule_requested" ? (
+                    <Card key={record.id} className="border-destructive bg-destructive/5"><CardContent className="p-4 flex flex-col md:flex-row items-center justify-between gap-3"><div className="flex gap-3"><AlertTriangle className="text-destructive h-5 w-5 mt-1" /><div><p className="font-bold text-destructive">Reschedule Needed</p><p className="text-sm">High no-show risk detected for {record.department}.</p></div></div><Button variant="outline" onClick={() => setActiveTab("appointment")}>Reschedule</Button></CardContent></Card>
+                   ) : (
+                    <Card key={record.id} className="border-border"><CardContent className="p-4 flex justify-between items-center"><div><p className="font-semibold">{record.diagnosis || "Consultation"}</p><p className="text-sm text-muted-foreground">{record.doctor} · {record.department}</p></div><Badge>{record.status}</Badge></CardContent></Card>
+                   )
+                ))}
               </div>
-            )}
+             }
           </motion.div>
         )}
 
+        {/* --- NEW: RESTORED EMERGENCY TAB --- */}
         {activeTab === "emergency" && (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6">
             <EmergencyLocator />
           </motion.div>
         )}
+
       </div>
     </DashboardLayout>
   );

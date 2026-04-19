@@ -4,7 +4,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import {
   LayoutDashboard, BedDouble, Users, Stethoscope, Brain,
   Loader2, Check, Plus, Edit, Trash2, X, Search, AlertCircle,
-  ShieldAlert, AlertTriangle, Clock
+  ShieldAlert, AlertTriangle, Clock, Database, Filter
 } from "lucide-react";
 import DashboardLayout from "@/components/DashboardLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -12,12 +12,14 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { toast } from "sonner";
 
 const navItems = [
   { title: "Overview", url: "/admin", icon: LayoutDashboard },
   { title: "AI Triage", url: "/admin/triage", icon: Brain }, 
   { title: "Bed Management", url: "/admin/beds", icon: BedDouble },
   { title: "Directory", url: "/admin/directory", icon: Users },
+  { title: "Global Records", url: "/admin/records", icon: Database },
 ];
 
 const dummyDoctors = [
@@ -38,7 +40,7 @@ const allDepartments = ["Cardiology", "General Medicine", "Orthopedics", "Dermat
 const AdminDashboard = () => {
   const location = useLocation();
   const navigate = useNavigate();
-  const [activeTab, setActiveTab] = useState<"overview" | "triage" | "beds" | "directory">("overview");
+  const [activeTab, setActiveTab] = useState<"overview" | "triage" | "beds" | "directory" | "records">("overview");
   
   // --- EXISTING STATES ---
   const [beds, setBeds] = useState<any[]>([]); 
@@ -54,9 +56,13 @@ const AdminDashboard = () => {
   const [patients, setPatients] = useState(dummyPatients);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [formData, setFormData] = useState({ name: "", email: "", phone: "", department: "", age: "", status: "Active" });
-
-  // --- NEW: AI TRIAGE STATES ---
   const [appointments, setAppointments] = useState<any[]>([]);
+
+  // --- UPDATED: GLOBAL RECORDS SEARCH STATES ---
+  const [records, setRecords] = useState<any[]>([]);
+  const [searchName, setSearchName] = useState(""); 
+  const [searchMonths, setSearchMonths] = useState("");
+  const [isSearching, setIsSearching] = useState(false);
 
   // Fetch ML Appointments
   const fetchAppointments = async () => {
@@ -72,6 +78,37 @@ const AdminDashboard = () => {
     }
   };
 
+  // --- UPDATED: Handle Search Function ---
+  const handleSearch = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    setIsSearching(true);
+    
+    try {
+      const API_BASE = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
+      let url = `${API_BASE}/api/admin/records?`;
+      const params = new URLSearchParams();
+      
+      if (searchName) params.append("name", searchName.trim());
+      if (searchMonths) params.append("months", searchMonths);
+      
+      const fullUrl = url + params.toString();
+      
+      const res = await fetch(fullUrl);
+      const data = await res.json();
+      
+      if (data.status === "success") {
+        setRecords(data.data);
+      } else {
+        toast.error("Failed to fetch data from server.");
+      }
+    } catch (err) {
+      console.error("SEARCH ERROR:", err); 
+      toast.error("Failed to search hospital records.");
+    } finally {
+      setIsSearching(false);
+    }
+  };
+
   useEffect(() => {
     const path = location.pathname;
     if (path.includes("/beds")) {
@@ -80,6 +117,8 @@ const AdminDashboard = () => {
       setActiveTab("directory");
     } else if (path.includes("/triage")) {
       setActiveTab("triage");
+    } else if (path.includes("/records")) {
+      setActiveTab("records");
     } else {
       setActiveTab("overview");
     }
@@ -105,9 +144,9 @@ const AdminDashboard = () => {
   useEffect(() => {
     fetchLiveBeds();
     fetchAppointments(); // Fetch AI appointments on load
+    handleSearch(); // Fetch all records on initial load
   }, []);
 
-  // --- NEW: Handle Admin ML Triage Actions ---
   const handleTriageAction = async (appointmentId: number, actionType: "confirm" | "double_book" | "dismiss") => {
     try {
       const API_BASE = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
@@ -116,14 +155,12 @@ const AdminDashboard = () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: actionType }),
       });
-      // Refresh the list to remove the appointment we just processed
       fetchAppointments();
     } catch (err) {
       console.error("Action failed", err);
     }
   };
 
-  // --- EXISTING LOGIC ---
   const totalPatients = patients.length;
   const availableDoctors = doctors.filter(d => d.status === "Active").length;
   const freeBeds = beds.filter(b => !b.occupied).length;
@@ -228,6 +265,7 @@ const AdminDashboard = () => {
             { key: "triage" as const, label: "AI Triage", icon: Brain, path: "/admin/triage" }, 
             { key: "beds" as const, label: "Bed Management", icon: BedDouble, path: "/admin/beds" },
             { key: "directory" as const, label: "Master Directory", icon: Users, path: "/admin/directory" },
+            { key: "records" as const, label: "Global Records", icon: Database, path: "/admin/records" },
           ].map((tab) => (
             <button
               key={tab.key}
@@ -288,7 +326,7 @@ const AdminDashboard = () => {
           </motion.div>
         )}
 
-        {/* --- NEW: AI TRIAGE TAB --- */}
+        {/* TRIAGE TAB */}
         {activeTab === "triage" && (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-4">
              {appointments.length === 0 ? (
@@ -306,7 +344,6 @@ const AdminDashboard = () => {
                     <div className={`h-1 w-full ${apt.no_show_risk > 50 ? 'bg-destructive' : apt.no_show_risk > 20 ? 'bg-warning' : 'bg-success'}`} />
                     <CardContent className="p-5 flex flex-col md:flex-row md:items-center justify-between gap-6">
                       
-                      {/* Patient Info */}
                       <div className="flex-1">
                         <h3 className="font-bold text-lg text-foreground">{apt.full_name || "Unknown Patient"}</h3>
                         <div className="flex flex-wrap items-center gap-4 text-sm text-muted-foreground mt-2">
@@ -316,13 +353,11 @@ const AdminDashboard = () => {
                           </div>
                           <div className="flex items-center gap-1.5">
                             <Stethoscope className="h-4 w-4" />
-                            {/* UPDATED: Displays dynamic doctor name from the backend */}
                             <span>Dr. {apt.doctor_name || apt.doctor_id}</span>
                           </div>
                         </div>
                       </div>
 
-                      {/* ML Risk Badge */}
                       <div className="flex flex-col items-start md:items-center md:px-8 md:border-x border-border">
                         <span className="text-xs text-muted-foreground mb-1.5 font-medium uppercase tracking-wider">AI No-Show Risk</span>
                         {apt.no_show_risk > 50 ? (
@@ -334,13 +369,12 @@ const AdminDashboard = () => {
                             <AlertTriangle className="h-4 w-4 mr-1" /> {apt.no_show_risk}% Medium Risk
                           </Badge>
                         ) : (
-                          <Badge variant="success" className="px-3 py-1 text-sm bg-success/10 text-success border-success/20">
+                          <Badge variant="secondary" className="px-3 py-1 text-sm bg-success/10 text-success border-success/20">
                             <Check className="h-4 w-4 mr-1" /> {apt.no_show_risk || 0}% Safe
                           </Badge>
                         )}
                       </div>
 
-                      {/* Admin Action Buttons */}
                       <div className="flex flex-col sm:flex-row md:flex-col lg:flex-row gap-2">
                         <Button size="sm" variant="outline" className="border-success text-success hover:bg-success/10" onClick={() => handleTriageAction(apt.appointment_id, "confirm")}>
                           Confirm Slot
@@ -358,6 +392,93 @@ const AdminDashboard = () => {
                 ))}
               </div>
             )}
+          </motion.div>
+        )}
+
+        {/* --- UPDATED: GLOBAL RECORDS TAB --- */}
+        {activeTab === "records" && (
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-4">
+            
+            <Card className="border-border shadow-sm">
+              <CardContent className="p-4 sm:p-6">
+                <form onSubmit={handleSearch} className="flex flex-col sm:flex-row gap-4 items-end">
+                  <div className="w-full sm:flex-1 space-y-2">
+                    <Label>Search by Patient or Doctor Name</Label>
+                    <div className="relative">
+                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                      <Input 
+                        placeholder="e.g. 'Sarah' or 'Davis'" 
+                        className="pl-9"
+                        value={searchName} 
+                        onChange={(e) => setSearchName(e.target.value)}
+                      />
+                    </div>
+                  </div>
+                  
+                  <div className="w-full sm:w-56 space-y-2">
+                    <Label>Timeframe</Label>
+                    <div className="relative">
+                      <Filter className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                      <select 
+                        value={searchMonths}
+                        onChange={(e) => setSearchMonths(e.target.value)}
+                        className="w-full h-10 rounded-md border border-input bg-background pl-9 pr-3 text-sm text-foreground focus:ring-2 focus:ring-primary outline-none"
+                      >
+                        <option value="">All Time</option>
+                        <option value="upcoming">Upcoming/Future</option>
+                        <option value="1">Past 1 Month</option>
+                        <option value="6">Past 6 Months</option>
+                        <option value="12">Past 1 Year</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <Button type="submit" disabled={isSearching} className="w-full sm:w-auto px-8">
+                    {isSearching ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : "Search"}
+                  </Button>
+                </form>
+              </CardContent>
+            </Card>
+
+            <Card className="border-border overflow-hidden">
+              <div className="overflow-x-auto max-h-[600px] overflow-y-auto">
+                <table className="w-full text-sm text-left">
+                  <thead className="bg-muted/50 text-muted-foreground uppercase text-xs sticky top-0 shadow-sm z-10">
+                    <tr>
+                      <th className="px-6 py-4 font-semibold">Patient Name</th>
+                      <th className="px-6 py-4 font-semibold">Phone</th>
+                      <th className="px-6 py-4 font-semibold">Date & Time</th>
+                      <th className="px-6 py-4 font-semibold">Assigned Doctor</th>
+                      <th className="px-6 py-4 font-semibold">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border">
+                    {records.length === 0 ? (
+                      <tr>
+                        <td colSpan={5} className="px-6 py-8 text-center text-muted-foreground">
+                          No appointment records found matching those filters.
+                        </td>
+                      </tr>
+                    ) : (
+                      records.map((record) => (
+                        <tr key={record.appointment_id} className="hover:bg-muted/20 transition-colors">
+                          <td className="px-6 py-4 font-medium text-foreground">{record.patient_name}</td>
+                          <td className="px-6 py-4 text-muted-foreground">{record.phone}</td>
+                          <td className="px-6 py-4 text-muted-foreground">{record.appointment_time}</td>
+                          <td className="px-6 py-4 text-muted-foreground">{record.doctor_name}</td>
+                          <td className="px-6 py-4">
+                            <Badge variant={record.status === 'completed' ? 'default' : record.status === 'reschedule_requested' ? 'destructive' : 'secondary'}>
+                              {record.status}
+                            </Badge>
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </Card>
+
           </motion.div>
         )}
 

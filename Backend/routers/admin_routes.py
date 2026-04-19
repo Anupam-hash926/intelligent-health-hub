@@ -1,5 +1,6 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
+from typing import Optional
 import psycopg2
 import psycopg2.extras
 import os
@@ -116,3 +117,80 @@ def handle_appointment_action(appointment_id: int, request: AdminAction):
             cursor.close()
         if conn:
             conn.close()
+
+# ==========================================
+# 3. GLOBAL HOSPITAL RECORDS (SEARCH BY NAME)
+# ==========================================
+# ==========================================
+# 3. GLOBAL HOSPITAL RECORDS (SEARCH BY NAME)
+# ==========================================
+@router.get("/records")
+def get_hospital_records(name: Optional[str] = None, months: Optional[str] = None):
+    conn = None
+    cursor = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        query = """
+            SELECT 
+                a.appointment_id, 
+                CAST(a.appointment_time AS TEXT) as appointment_time, 
+                a.status, 
+                a.doctor_id,
+                CASE 
+                    WHEN a.doctor_id = '1' THEN 'Sarah Chen'
+                    WHEN a.doctor_id = '2' THEN 'James Wilson'
+                    WHEN a.doctor_id = '3' THEN 'Emily Park'
+                    WHEN a.doctor_id = '4' THEN 'Michael Ross'
+                    WHEN a.doctor_id = '5' THEN 'Robert King'
+                    WHEN a.doctor_id = '6' THEN 'Lisa Cuddy'
+                    ELSE 'ID: ' || a.doctor_id 
+                END as doctor_name,
+                COALESCE(p.full_name, 'Unknown Patient') as patient_name,
+                COALESCE(p.phone, 'No Phone') as phone
+            FROM appointments a
+            LEFT JOIN patient_profiles p ON a.patient_id = p.uid
+            WHERE 1=1 
+        """
+        params = []
+        
+        # FILTER 1: Name Match (Patient OR Doctor)
+        if name:
+            query += """ AND (
+                p.full_name ILIKE %s 
+                OR 
+                CASE 
+                    WHEN a.doctor_id = '1' THEN 'Sarah Chen'
+                    WHEN a.doctor_id = '2' THEN 'James Wilson'
+                    WHEN a.doctor_id = '3' THEN 'Emily Park'
+                    WHEN a.doctor_id = '4' THEN 'Michael Ross'
+                    WHEN a.doctor_id = '5' THEN 'Robert King'
+                    WHEN a.doctor_id = '6' THEN 'Lisa Cuddy'
+                    ELSE 'ID: ' || a.doctor_id 
+                END ILIKE %s
+            )"""
+            params.extend([f"%{name}%", f"%{name}%"]) 
+            
+        # FILTER 2: STRICT Timeframe Logic
+        if months == "upcoming":
+            # Only show appointments scheduled for today or the future
+            query += " AND a.appointment_time >= CURRENT_DATE"
+        elif months and months.isdigit():
+            # Only show appointments bounded exactly within the past X months (no future dates)
+            query += " AND a.appointment_time >= CURRENT_DATE - MAKE_INTERVAL(months => %s) AND a.appointment_time <= CURRENT_DATE"
+            params.append(int(months))
+            
+        query += " ORDER BY a.appointment_time DESC;"
+        
+        cursor.execute(query, tuple(params))
+        records = cursor.fetchall()
+        
+        return {"status": "success", "data": records}
+
+    except Exception as e:
+        print(f"🔥 RECORD SEARCH ERROR: {e}")
+        raise HTTPException(status_code=500, detail="Failed to search records")
+    finally:
+        if cursor: cursor.close()
+        if conn: conn.close()

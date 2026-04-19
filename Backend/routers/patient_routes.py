@@ -146,21 +146,26 @@ def update_patient_profile(uid: str, data: ProfileUpdate):
         today = datetime.today()
         calculated_age = today.year - birth_date.year - ((today.month, today.day) < (birth_date.month, birth_date.day))
 
+        # 1. Update the Users Table
         cursor.execute("""
             UPDATE users 
             SET full_name = %s, email = %s, phone = %s
             WHERE uid = %s;
         """, (data.full_name, data.email, data.phone, uid))
 
+        # 2. Update the Patient Profiles Table (FIXED: Now includes name, email, and phone)
         cursor.execute("""
-            INSERT INTO patient_profiles (uid, dob, age, distance_miles)
-            VALUES (%s, %s, %s, %s)
+            INSERT INTO patient_profiles (uid, full_name, email, phone, dob, age, distance_miles)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (uid) 
             DO UPDATE SET 
+                full_name = EXCLUDED.full_name,
+                email = EXCLUDED.email,
+                phone = EXCLUDED.phone,
                 dob = EXCLUDED.dob, 
                 age = EXCLUDED.age, 
                 distance_miles = EXCLUDED.distance_miles;
-        """, (uid, data.dob, calculated_age, data.distance_miles))
+        """, (uid, data.full_name, data.email, data.phone, data.dob, calculated_age, data.distance_miles))
         
         conn.commit()
         return {"status": "success", "message": "Comprehensive Profile saved successfully!"}
