@@ -4,7 +4,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import {
   LayoutDashboard, BedDouble, Users, Stethoscope, Brain,
   Loader2, Check, Plus, Edit, Trash2, X, Search, AlertCircle,
-  ShieldAlert, AlertTriangle, Clock, Database, Filter
+  ShieldAlert, AlertTriangle, Clock, Database, Filter, Phone, CalendarDays
 } from "lucide-react";
 import DashboardLayout from "@/components/DashboardLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -40,7 +40,7 @@ const allDepartments = ["Cardiology", "General Medicine", "Orthopedics", "Dermat
 const AdminDashboard = () => {
   const location = useLocation();
   const navigate = useNavigate();
-  const [activeTab, setActiveTab] = useState<"overview" | "triage" | "beds" | "directory" | "records">("overview");
+  const [activeTab, setActiveTab] = useState<"overview" | "triage" | "beds" | "directory" | "records" | "lookup">("overview");
   
   // --- EXISTING STATES ---
   const [beds, setBeds] = useState<any[]>([]); 
@@ -64,6 +64,11 @@ const AdminDashboard = () => {
   const [searchMonths, setSearchMonths] = useState("");
   const [isSearching, setIsSearching] = useState(false);
 
+  // --- NEW: PATIENT LOOKUP STATES ---
+  const [lookupPhone, setLookupPhone] = useState("");
+  const [lookupResult, setLookupResult] = useState<any>(null);
+  const [isLookingUp, setIsLookingUp] = useState(false);
+
   // Fetch ML Appointments
   const fetchAppointments = async () => {
     try {
@@ -78,7 +83,7 @@ const AdminDashboard = () => {
     }
   };
 
-  // --- UPDATED: Handle Search Function ---
+  // --- Handle Search Function ---
   const handleSearch = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     setIsSearching(true);
@@ -109,6 +114,33 @@ const AdminDashboard = () => {
     }
   };
 
+  // --- Handle Phone Lookup Function ---
+  const handlePhoneLookup = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!lookupPhone.trim()) return;
+    
+    setIsLookingUp(true);
+    setLookupResult(null);
+    
+    try {
+      const API_BASE = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
+      const res = await fetch(`${API_BASE}/api/admin/patient-lookup?phone=${encodeURIComponent(lookupPhone.trim())}`);
+      const data = await res.json();
+      
+      if (res.ok && data.status === "success") {
+        setLookupResult(data.data);
+        toast.success("Patient found!");
+      } else {
+        toast.error(data.detail || "Patient not found.");
+      }
+    } catch (err) {
+      console.error(err);
+      toast.error("Network error while searching for patient.");
+    } finally {
+      setIsLookingUp(false);
+    }
+  };
+
   useEffect(() => {
     const path = location.pathname;
     if (path.includes("/beds")) {
@@ -119,6 +151,8 @@ const AdminDashboard = () => {
       setActiveTab("triage");
     } else if (path.includes("/records")) {
       setActiveTab("records");
+    } else if (path.includes("/lookup")) {
+      setActiveTab("lookup");
     } else {
       setActiveTab("overview");
     }
@@ -266,6 +300,7 @@ const AdminDashboard = () => {
             { key: "beds" as const, label: "Bed Management", icon: BedDouble, path: "/admin/beds" },
             { key: "directory" as const, label: "Master Directory", icon: Users, path: "/admin/directory" },
             { key: "records" as const, label: "Global Records", icon: Database, path: "/admin/records" },
+            { key: "lookup" as const, label: "Patient Lookup", icon: Phone, path: "/admin/lookup" },
           ].map((tab) => (
             <button
               key={tab.key}
@@ -395,7 +430,7 @@ const AdminDashboard = () => {
           </motion.div>
         )}
 
-        {/* --- UPDATED: GLOBAL RECORDS TAB --- */}
+        {/* GLOBAL RECORDS TAB */}
         {activeTab === "records" && (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-4">
             
@@ -479,6 +514,82 @@ const AdminDashboard = () => {
               </div>
             </Card>
 
+          </motion.div>
+        )}
+
+        {/* --- PATIENT LOOKUP TAB --- */}
+        {activeTab === "lookup" && (
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6">
+            <Card className="border-border shadow-sm">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Phone className="h-5 w-5 text-primary" />
+                  Direct Patient Lookup
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <form onSubmit={handlePhoneLookup} className="flex flex-col sm:flex-row gap-4 items-end max-w-xl">
+                  <div className="w-full space-y-2">
+                    <Label>Registered Phone Number</Label>
+                    <Input 
+                      placeholder="e.g. +1-555-0192" 
+                      value={lookupPhone} 
+                      onChange={(e) => setLookupPhone(e.target.value)}
+                    />
+                  </div>
+                  <Button type="submit" disabled={isLookingUp || !lookupPhone} className="w-full sm:w-auto px-8">
+                    {isLookingUp ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : "Search"}
+                  </Button>
+                </form>
+              </CardContent>
+            </Card>
+
+            {lookupResult && (
+              <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}>
+                <Card className="border-border overflow-hidden">
+                  <div className="bg-primary/5 p-4 border-b border-border flex items-center gap-4">
+                    <div className="h-16 w-16 bg-primary/20 text-primary rounded-full flex items-center justify-center text-xl font-bold">
+                      {lookupResult.full_name.charAt(0)}
+                    </div>
+                    <div>
+                      <h2 className="text-2xl font-bold text-foreground">{lookupResult.full_name}</h2>
+                    </div>
+                  </div>
+                  <CardContent className="p-6">
+                    {/* CHANGED FROM 3 COLUMNS TO 4 COLUMNS */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                      <div className="space-y-1">
+                        <Label className="text-xs text-muted-foreground uppercase tracking-wider">Contact Info</Label>
+                        <p className="font-medium flex items-center gap-2"><Phone className="h-4 w-4 text-muted-foreground" /> {lookupResult.phone}</p>
+                        <p className="text-sm text-muted-foreground truncate" title={lookupResult.email}>{lookupResult.email}</p>
+                      </div>
+                      
+                      <div className="space-y-1">
+                        <Label className="text-xs text-muted-foreground uppercase tracking-wider">Demographics</Label>
+                        <p className="font-medium">Age: {lookupResult.age || "N/A"}</p>
+                        <p className="text-sm text-muted-foreground">DOB: {lookupResult.dob || "N/A"}</p>
+                      </div>
+
+                      <div className="space-y-1">
+                        <Label className="text-xs text-muted-foreground uppercase tracking-wider">Medical Data</Label>
+                        <p className="font-medium">Blood Group: {lookupResult.blood_group || "Not Recorded"}</p>
+                        <p className="text-sm text-muted-foreground">Distance: {lookupResult.distance_miles ? `${lookupResult.distance_miles} miles` : "N/A"}</p>
+                      </div>
+
+                      {/* --- NEW ACCOUNT HISTORY BLOCK --- */}
+                      <div className="space-y-1">
+                        <Label className="text-xs text-muted-foreground uppercase tracking-wider">Account History</Label>
+                        <p className="font-medium flex items-center gap-2">
+                          <CalendarDays className="h-4 w-4 text-muted-foreground" /> 
+                          Joined {lookupResult.joined_text || "N/A"}
+                        </p>
+                        <p className="text-sm text-muted-foreground">Date: {lookupResult.created_at || "Not Recorded"}</p>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              </motion.div>
+            )}
           </motion.div>
         )}
 

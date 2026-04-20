@@ -5,6 +5,8 @@ import psycopg2
 import psycopg2.extras
 import os
 from dotenv import load_dotenv
+from datetime import datetime, timezone
+
 
 load_dotenv()
 DB_URL = os.getenv("DATABASE_URL")
@@ -191,6 +193,85 @@ def get_hospital_records(name: Optional[str] = None, months: Optional[str] = Non
     except Exception as e:
         print(f"🔥 RECORD SEARCH ERROR: {e}")
         raise HTTPException(status_code=500, detail="Failed to search records")
+    finally:
+        if cursor: cursor.close()
+        if conn: conn.close()
+# ==========================================
+# 4. PATIENT LOOKUP BY PHONE (FETCHING ACCOUNT HISTORY)
+# ==========================================
+@router.get("/patient-lookup")
+def lookup_patient_by_phone(phone: str):
+    conn = None
+    cursor = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        search_term = f"%{phone.strip()}%"
+        
+        # We make the `users` table the base since auth details (email, created_at) live there
+        query = """
+            SELECT 
+                u.uid, 
+                COALESCE(p.full_name, u.full_name, 'Unknown') as full_name, 
+                COALESCE(u.email, p.email, 'No Email') as email, 
+                COALESCE(u.phone, p.phone, 'No Phone') as phone, 
+                p.dob, 
+                p.age, 
+                p.distance_miles, 
+                p.blood_group,
+                u.created_at
+            FROM users u
+            LEFT JOIN patient_profiles p ON u.uid = p.uid
+            WHERE u.phone ILIKE %s OR p.phone ILIKE %s;
+        """
+        cursor.execute(query, (search_term, search_term))
+        patient = cursor.fetchone()
+        
+        if not patient:
+            raise HTTPException(status_code=404, detail="No patient found with this phone number.")
+
+        # Format DOB if it exists
+        if patient.get('dob') and hasattr(patient['dob'], 'strftime'):
+            patient['dob'] = patient['dob'].strftime("%Y-%m-%d")
+            
+        # Calculate "Joined X days/months ago" dynamically
+        patient['joined_text'] = "Unknown"
+        if patient.get('created_at'):
+            created_date = patient['created_at']
+            
+            # Handle naive vs timezone-aware datetimes
+            if created_date.tzinfo is None:
+                now = datetime.now()
+            else:
+                now = datetime.now(timezone.utc)
+                
+            diff = now - created_date
+            days = diff.days
+            
+            if days == 0:
+                patient['joined_text'] = "Today"
+            elif days == 1:
+                patient['joined_text'] = "Yesterday"
+            elif days < 30:
+                patient['joined_text'] = f"{days} days ago"
+            elif days < 365:
+                months = days // 30
+                patient['joined_text'] = f"{months} month{'s' if months > 1 else ''} ago"
+            else:
+                years = days // 365
+                patient['joined_text'] = f"{years} year{'s' if years > 1 else ''} ago"
+                
+            # Format the raw date to send back as well
+            patient['created_at'] = created_date.strftime("%B %d, %Y")
+            
+        return {"status": "success", "data": patient}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"🔥 PATIENT LOOKUP ERROR: {e}")
+        raise HTTPException(status_code=500, detail="Failed to lookup patient")
     finally:
         if cursor: cursor.close()
         if conn: conn.close()
