@@ -13,10 +13,9 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner"; 
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 import EmergencyLocator from "@/components/EmergencyLocator";
-
-// --- NEW: Import the Auth Memory ---
 import { useAuth } from "@/contexts/AuthContext";
 
 const navItems = [
@@ -38,6 +37,8 @@ const timeSlots = [
   { time: "03:00 PM", demand: "low" }, { time: "04:00 PM", demand: "medium" },
 ];
 
+const bloodGroups = ["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"];
+
 const PatientDashboard = () => {
   const location = useLocation();
   const navigate = useNavigate();
@@ -56,13 +57,16 @@ const PatientDashboard = () => {
   const [phone, setPhone] = useState("");
   const [dob, setDob] = useState("");
   const [patientDistance, setPatientDistance] = useState<number | "">("");
+  const [bloodGroup, setBloodGroup] = useState("");
   
   const [profileMessage, setProfileMessage] = useState("");
   const [isSavingProfile, setIsSavingProfile] = useState(false);
+  const [isProfileLoading, setIsProfileLoading] = useState(true); // --- NEW: Profile loading state ---
 
   const [historyData, setHistoryData] = useState<any[]>([]);
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
 
+  // Determine active tab based on URL
   useEffect(() => {
     const path = location.pathname;
     if (path.includes("/appointment")) setActiveTab("appointment");
@@ -71,6 +75,26 @@ const PatientDashboard = () => {
     else setActiveTab("history");
   }, [location.pathname]);
 
+  // Fetch Profile Data IMMEDIATELY on load
+  useEffect(() => {
+    if (!currentUser?.uid) return;
+
+    setIsProfileLoading(true); // Start loading
+    fetch(`http://127.0.0.1:8000/api/patients/${currentUser.uid}/profile`)
+      .then(res => res.json())
+      .then(data => {
+        if (data.full_name) setFullName(data.full_name);
+        if (data.email) setEmail(data.email);
+        if (data.phone) setPhone(data.phone);
+        if (data.dob) setDob(data.dob);
+        if (data.distance_miles) setPatientDistance(data.distance_miles);
+        if (data.blood_group) setBloodGroup(data.blood_group);
+      })
+      .catch(err => console.error("Could not fetch profile", err))
+      .finally(() => setIsProfileLoading(false)); // Stop loading when done
+  }, [currentUser?.uid]);
+
+  // Fetch History Data ONLY when on History tab
   useEffect(() => {
     if (!currentUser?.uid) return;
 
@@ -81,18 +105,6 @@ const PatientDashboard = () => {
         .then(data => setHistoryData(data.data && data.data.length > 0 ? data.data : medicalHistory))
         .catch(() => setHistoryData(medicalHistory))
         .finally(() => setIsLoadingHistory(false));
-    } 
-    else if (activeTab === "profile") {
-      fetch(`http://127.0.0.1:8000/api/patients/${currentUser.uid}/profile`)
-        .then(res => res.json())
-        .then(data => {
-          if (data.full_name) setFullName(data.full_name);
-          if (data.email) setEmail(data.email);
-          if (data.phone) setPhone(data.phone);
-          if (data.dob) setDob(data.dob);
-          if (data.distance_miles) setPatientDistance(data.distance_miles);
-        })
-        .catch(err => console.error("Could not fetch profile", err));
     }
   }, [activeTab, currentUser?.uid]);
 
@@ -106,6 +118,12 @@ const PatientDashboard = () => {
   const handleSaveProfile = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentUser?.uid) return;
+
+    if (!bloodGroup) {
+      setProfileMessage("Error: Blood Group is required.");
+      toast.error("Please select a Blood Group");
+      return;
+    }
 
     if (phone.length !== 9) {
       setProfileMessage("Error: Phone number must be exactly 9 digits.");
@@ -122,7 +140,8 @@ const PatientDashboard = () => {
           email: email,
           phone: phone,
           dob: dob,
-          distance_miles: patientDistance 
+          distance_miles: patientDistance,
+          blood_group: bloodGroup
         }),
       });
       if (!res.ok) throw new Error("Failed to save");
@@ -139,8 +158,8 @@ const PatientDashboard = () => {
     e.preventDefault();
     if (!currentUser?.uid) return;
     
-    if (!dob || !patientDistance) {
-      toast.error("Please complete your profile first.");
+    if (!dob || patientDistance === "" || !bloodGroup) {
+      toast.error("Please complete your profile (including Blood Group) first.");
       navigate("/patient/profile");
       return;
     }
@@ -204,7 +223,13 @@ const PatientDashboard = () => {
       <div className="max-w-6xl mx-auto space-y-6">
         <div>
           <h1 className="text-2xl md:text-3xl font-display font-bold text-foreground">
-            Welcome back, <span className="text-gradient">{fullName || currentUser?.email?.split('@')[0] || "Guest"}</span>
+            Welcome back,{" "}
+            {/* --- FIX: Skeleton Loader while fetching --- */}
+            {isProfileLoading ? (
+              <span className="inline-block h-8 w-32 md:w-48 bg-muted animate-pulse rounded-md align-middle"></span>
+            ) : (
+              <span className="text-gradient">{fullName || currentUser?.email?.split('@')[0] || "Guest"}</span>
+            )}
           </h1>
           <p className="text-muted-foreground mt-1">Manage your health records and appointments</p>
         </div>
@@ -245,7 +270,7 @@ const PatientDashboard = () => {
                     <h3 className="text-sm font-semibold text-foreground border-b pb-2">Personal Information</h3>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                       <div className="space-y-2">
-                        <Label>Full Name</Label>
+                        <Label>Full Name <span className="text-destructive">*</span></Label>
                         <Input 
                           placeholder="e.g. John Doe" 
                           value={fullName} 
@@ -254,7 +279,7 @@ const PatientDashboard = () => {
                         />
                       </div>
                       <div className="space-y-2">
-                        <Label>Date of Birth</Label>
+                        <Label>Date of Birth <span className="text-destructive">*</span></Label>
                         <Input 
                           type="date" 
                           value={dob} 
@@ -274,6 +299,19 @@ const PatientDashboard = () => {
                           required 
                         />
                       </div>
+                      <div className="space-y-2">
+                        <Label>Blood Group <span className="text-destructive">*</span></Label>
+                        <Select value={bloodGroup} onValueChange={setBloodGroup} required>
+                          <SelectTrigger className={!bloodGroup ? "border-destructive/50 focus:ring-destructive/20" : ""}>
+                            <SelectValue placeholder="Select Blood Group" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {bloodGroups.map((bg) => (
+                              <SelectItem key={bg} value={bg}>{bg}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
                     </div>
                   </div>
 
@@ -281,7 +319,7 @@ const PatientDashboard = () => {
                     <h3 className="text-sm font-semibold text-foreground border-b pb-2">Contact & Location</h3>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                       <div className="space-y-2">
-                        <Label>Email Address</Label>
+                        <Label>Email Address <span className="text-destructive">*</span></Label>
                         <Input 
                           type="email" 
                           value={email} 
@@ -290,7 +328,7 @@ const PatientDashboard = () => {
                         />
                       </div>
                       <div className="space-y-2">
-                        <Label>Phone Number</Label>
+                        <Label>Phone Number <span className="text-destructive">*</span></Label>
                         <Input 
                           type="tel" 
                           placeholder="123456789"
@@ -306,7 +344,7 @@ const PatientDashboard = () => {
                         <p className="text-xs text-muted-foreground mt-1">Must be exactly 9 digits.</p>
                       </div>
                       <div className="space-y-2 md:col-span-2">
-                        <Label>Distance to Hospital (miles)</Label>
+                        <Label>Distance to Hospital (miles) <span className="text-destructive">*</span></Label>
                         <Input 
                           type="number" 
                           placeholder="e.g. 15" 
@@ -407,7 +445,6 @@ const PatientDashboard = () => {
           </motion.div>
         )}
 
-        {/* --- NEW: RESTORED EMERGENCY TAB --- */}
         {activeTab === "emergency" && (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6">
             <EmergencyLocator />

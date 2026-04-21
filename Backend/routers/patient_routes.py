@@ -4,7 +4,7 @@ import psycopg2
 import psycopg2.extras
 import os
 from dotenv import load_dotenv
-from datetime import datetime  
+from datetime import datetime
 
 # Load database credentials from the .env file
 load_dotenv()
@@ -133,6 +133,7 @@ class ProfileUpdate(BaseModel):
     phone: str
     dob: str
     distance_miles: int
+    blood_group: str  # Added blood_group to the schema
 
 @router.post("/{uid}/update-profile")
 def update_patient_profile(uid: str, data: ProfileUpdate):
@@ -153,10 +154,10 @@ def update_patient_profile(uid: str, data: ProfileUpdate):
             WHERE uid = %s;
         """, (data.full_name, data.email, data.phone, uid))
 
-        # 2. Update the Patient Profiles Table (FIXED: Now includes name, email, and phone)
+        # 2. Update the Patient Profiles Table (Now includes blood_group)
         cursor.execute("""
-            INSERT INTO patient_profiles (uid, full_name, email, phone, dob, age, distance_miles)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            INSERT INTO patient_profiles (uid, full_name, email, phone, dob, age, distance_miles, blood_group)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (uid) 
             DO UPDATE SET 
                 full_name = EXCLUDED.full_name,
@@ -164,8 +165,9 @@ def update_patient_profile(uid: str, data: ProfileUpdate):
                 phone = EXCLUDED.phone,
                 dob = EXCLUDED.dob, 
                 age = EXCLUDED.age, 
-                distance_miles = EXCLUDED.distance_miles;
-        """, (uid, data.full_name, data.email, data.phone, data.dob, calculated_age, data.distance_miles))
+                distance_miles = EXCLUDED.distance_miles,
+                blood_group = EXCLUDED.blood_group;
+        """, (uid, data.full_name, data.email, data.phone, data.dob, calculated_age, data.distance_miles, data.blood_group))
         
         conn.commit()
         return {"status": "success", "message": "Comprehensive Profile saved successfully!"}

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap } from 'react-leaflet';
-import { MapPin, Navigation, AlertTriangle, Settings2, Activity } from 'lucide-react';
+import { MapPin, Navigation, AlertTriangle, Settings2, Activity, Phone } from 'lucide-react';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
 
@@ -30,16 +30,26 @@ const redHospitalIcon = new L.Icon({
   shadowSize: [41, 41]
 });
 
-// NEW: Added distance property to the interface
+// Fallback dictionary for hospitals missing contact tags in OpenStreetMap
+const HOSPITAL_CONTACTS: Record<string, string> = {
+  "ramaiah memorial": "+91 80 6215 3300",
+  "ramaiah dental": "080 2360 2079",
+  "ramaiah medical": "1800 123 1133"
+};
+
 interface Hospital {
   id: number;
   lat: number;
   lon: number;
-  distance?: number; // Distance in meters
+  center?: { lat: number; lon: number };
+  distance?: number;
   tags: {
     name?: string;
     amenity?: string;
     emergency?: string;
+    phone?: string;
+    "contact:phone"?: string;
+    "contact:mobile"?: string;
   };
 }
 
@@ -113,8 +123,11 @@ export default function EmergencyLocator() {
 
         const query = `
           [out:json];
-          node["amenity"="hospital"](around:${searchRadius}, ${latitude}, ${longitude});
-          out;
+          (
+            nwr["amenity"="hospital"](around:${searchRadius}, ${latitude}, ${longitude});
+            nwr["healthcare"="hospital"](around:${searchRadius}, ${latitude}, ${longitude});
+          );
+          out center;
         `;
         const overpassUrl = `https://overpass-api.de/api/interpreter?data=${encodeURIComponent(query)}`;
 
@@ -122,13 +135,43 @@ export default function EmergencyLocator() {
           const response = await fetch(overpassUrl);
           const data = await response.json();
           
-          // NEW: Calculate distance for each hospital and sort them from closest to furthest
           const userLatLng = L.latLng(latitude, longitude);
           
           const processedHospitals = data.elements.map((hospital: Hospital) => {
-            const hospitalLatLng = L.latLng(hospital.lat, hospital.lon);
+            const lat = hospital.lat || hospital.center?.lat || 0;
+            const lon = hospital.lon || hospital.center?.lon || 0;
+            const hospitalLatLng = L.latLng(lat, lon);
             const distanceInMeters = userLatLng.distanceTo(hospitalLatLng);
-            return { ...hospital, distance: distanceInMeters };
+            
+            // Extract Name and Phone
+            const name = (hospital.tags.name || '').toLowerCase();
+            let resolvedPhone = hospital.tags.phone || hospital.tags["contact:phone"] || hospital.tags["contact:mobile"];
+            
+            // 1. If OSM lacks the number, check the hardcoded fallback dictionary
+            if (!resolvedPhone) {
+              for (const [key, val] of Object.entries(HOSPITAL_CONTACTS)) {
+                if (name.includes(key)) {
+                  resolvedPhone = val;
+                  break;
+                }
+              }
+            }
+
+            // 2. If it's still missing, assign the default toll-free emergency number
+            if (!resolvedPhone) {
+              resolvedPhone = "108 (Toll Free Emergency)";
+            }
+            
+            return { 
+              ...hospital, 
+              lat, 
+              lon, 
+              distance: distanceInMeters,
+              tags: {
+                ...hospital.tags,
+                phone: resolvedPhone
+              }
+            };
           }).sort((a: Hospital, b: Hospital) => (a.distance || 0) - (b.distance || 0));
 
           setHospitals(processedHospitals);
@@ -243,14 +286,16 @@ export default function EmergencyLocator() {
                   <Popup>
                     <div className="font-sans">
                       <strong className="block text-base mb-1">{hospital.tags.name || 'Unknown Facility'}</strong>
-                      {/* Show distance in the map popup too! */}
                       {hospital.distance && (
                         <span className="block text-sm font-medium text-blue-600 mb-1">
                           {(hospital.distance / 1000).toFixed(2)} km away
                         </span>
                       )}
-                      <span className="text-xs text-gray-500">
+                      <span className="text-xs text-gray-500 block mb-1">
                         Emergency: {hospital.tags.emergency === 'yes' ? 'Available' : 'Unknown'}
+                      </span>
+                      <span className="text-xs font-semibold text-gray-700">
+                        {hospital.tags.phone}
                       </span>
                     </div>
                   </Popup>
@@ -293,7 +338,6 @@ export default function EmergencyLocator() {
                         {hospital.tags.name || 'Unnamed Medical Center'}
                       </h4>
                       
-                      {/* NEW: Distance Display inside the card */}
                       <div className="flex items-center gap-1 text-sm text-muted-foreground mb-3">
                         <MapPin className="h-3.5 w-3.5 text-primary" />
                         <span className="font-medium text-foreground">
@@ -330,6 +374,21 @@ export default function EmergencyLocator() {
                         </>
                       )}
                     </button>
+
+                    {/* Phone Number Display */}
+                    {hospital.tags.phone && (
+                      <div className="mt-3 pt-3 border-t border-border flex justify-center">
+                        <a 
+                          // Ensures the tel: link strips text for proper dialing, while keeping the UI text intact
+                          href={`tel:${hospital.tags.phone.includes('108') ? '108' : hospital.tags.phone.replace(/[^0-9+]/g, '')}`} 
+                          className="text-sm font-semibold text-primary hover:text-primary/80 hover:underline flex items-center gap-2"
+                          onClick={(e) => e.stopPropagation()} 
+                        >
+                          <Phone className="h-4 w-4" />
+                          {hospital.tags.phone}
+                        </a>
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
