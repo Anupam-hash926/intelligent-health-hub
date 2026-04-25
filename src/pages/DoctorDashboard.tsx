@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { motion } from "framer-motion";
-import { Users, Clock, CheckCircle, Phone, CalendarHeart, Calendar as CalendarIcon } from "lucide-react";
+import { Users, Clock, CheckCircle, Phone, CalendarHeart, Calendar as CalendarIcon, Droplet } from "lucide-react";
 import DashboardLayout from "@/components/DashboardLayout";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
@@ -117,9 +117,24 @@ const DoctorDashboard = () => {
                     <CardContent className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                       <div>
                         <h3 className="font-bold text-lg text-foreground">{apt.patient_name}</h3>
-                        <div className="flex items-center gap-2 text-sm text-muted-foreground mt-1">
-                          <Phone className="h-3.5 w-3.5" /> {apt.phone}
+                        
+                        <div className="flex flex-wrap items-center gap-4 mt-2">
+                          {/* Phone Number */}
+                          <div className="flex items-center gap-1.5 text-sm text-muted-foreground">
+                            <Phone className="h-3.5 w-3.5" /> {apt.phone}
+                          </div>
+                          
+                          {/* Blood Group Display */}
+                          <div className="flex items-center gap-1.5 text-sm text-muted-foreground">
+                            <Droplet className="h-3.5 w-3.5 text-red-500" />
+                            {apt.blood_group && apt.blood_group !== "Not Recorded" ? (
+                              <span className="font-medium text-foreground">{apt.blood_group}</span>
+                            ) : (
+                              <span className="text-destructive font-medium italic text-xs">Not Recorded</span>
+                            )}
+                          </div>
                         </div>
+
                       </div>
                       <Button onClick={() => handleComplete(apt.appointment_id)} className="w-full sm:w-auto mt-auto" variant={apt.is_overbooked ? "outline" : "default"}>
                         <CheckCircle className="h-4 w-4 mr-2" /> Complete
