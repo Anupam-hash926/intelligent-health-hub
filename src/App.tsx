@@ -10,13 +10,11 @@ import Signup from "./pages/Signup";
 import NotFound from "./pages/NotFound";
 import PatientDashboard from "./pages/PatientDashboard";
 import AdminDashboard from "./pages/AdminDashboard";
-
-// --- WE SWAPPED THIS TO YOUR NEW LIVE DASHBOARD! ---
 import DoctorDashboard from "./pages/DoctorDashboard"; 
 import DoctorPatients from "./pages/DoctorPatients";
 
-// --- NEW: Import the AuthProvider Memory ---
 import { AuthProvider } from "./contexts/AuthContext";
+import ProtectedRoute from "./components/ProtectedRoute"; // <-- Import the guard
 
 const queryClient = new QueryClient();
 
@@ -25,23 +23,39 @@ const App = () => (
     <TooltipProvider>
       <Toaster />
       <Sonner />
-      {/* --- NEW: Wrap BrowserRouter inside AuthProvider --- */}
       <AuthProvider>
         <BrowserRouter>
           <Routes>
+            {/* Public Routes */}
             <Route path="/" element={<Index />} />
             <Route path="/login" element={<Login />} />
             <Route path="/signup" element={<Signup />} />
             
-            <Route path="/patient" element={<PatientDashboard />} />
-            <Route path="/patient/*" element={<PatientDashboard />} />
+            {/* PATIENT ONLY ROUTES */}
+            <Route path="/patient/*" element={
+              <ProtectedRoute allowedRoles={["patient"]}>
+                <PatientDashboard />
+              </ProtectedRoute>
+            } />
             
-            {/* --- POINT THIS TO THE LIVE DATABASE DASHBOARD! --- */}
-            <Route path="/doctor" element={<DoctorDashboard />} />
-            <Route path="/doctor/patients" element={<DoctorPatients />} />
+            {/* DOCTOR ONLY ROUTES */}
+            <Route path="/doctor" element={
+              <ProtectedRoute allowedRoles={["doctor"]}>
+                <DoctorDashboard />
+              </ProtectedRoute>
+            } />
+            <Route path="/doctor/patients" element={
+              <ProtectedRoute allowedRoles={["doctor"]}>
+                <DoctorPatients />
+              </ProtectedRoute>
+            } />
             
-            <Route path="/admin" element={<AdminDashboard />} />
-            <Route path="/admin/*" element={<AdminDashboard />} />
+            {/* ADMIN ONLY ROUTES */}
+            <Route path="/admin/*" element={
+              <ProtectedRoute allowedRoles={["admin"]}>
+                <AdminDashboard />
+              </ProtectedRoute>
+            } />
             
             <Route path="*" element={<NotFound />} />
           </Routes>

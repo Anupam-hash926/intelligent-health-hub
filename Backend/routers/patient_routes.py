@@ -182,6 +182,31 @@ def update_patient_profile(uid: str, data: ProfileUpdate):
             conn.close()
 
 # ==========================================
+# ENDPOINT: Fetch User Role for Login Guards
+# ==========================================
+@router.get("/{uid}/role")
+def get_user_role(uid: str):
+    conn = None
+    cursor = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT role FROM users WHERE uid = %s;", (uid,))
+        user = cursor.fetchone()
+        
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+            
+        return {"status": "success", "role": user["role"]}
+    except Exception as e:
+        print(f"Database Error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch user role")
+    finally:
+        if cursor: cursor.close()
+        if conn: conn.close()
+
+# ==========================================
 # ENDPOINT: Sync Firebase User to Supabase
 # ==========================================
 class UserSync(BaseModel):
@@ -197,31 +222,29 @@ def sync_firebase_user(data: UserSync):
         conn = get_db_connection()
         cursor = conn.cursor()
         
+        # 1. Ensure they exist in the main users table
         query = """
             INSERT INTO users (uid, email, role)
             VALUES (%s, %s, %s)
-            ON CONFLICT (uid) DO NOTHING;
+            ON CONFLICT (uid) DO UPDATE SET role = EXCLUDED.role;
         """
         cursor.execute(query, (data.uid, data.email, data.role))
         
+        # 2. Route them to their specific profile table based on role
         if data.role == "patient":
-            profile_query = """
-                INSERT INTO patient_profiles (uid)
-                VALUES (%s)
-                ON CONFLICT (uid) DO NOTHING;
-            """
-            cursor.execute(profile_query, (data.uid,))
+            cursor.execute("INSERT INTO patient_profiles (uid, email) VALUES (%s, %s) ON CONFLICT (uid) DO NOTHING;", (data.uid, data.email))
+        elif data.role == "doctor":
+            cursor.execute("INSERT INTO doctor_profiles (uid, email) VALUES (%s, %s) ON CONFLICT (uid) DO NOTHING;", (data.uid, data.email))
+        elif data.role == "admin":
+            cursor.execute("INSERT INTO admin_profiles (uid, email) VALUES (%s, %s) ON CONFLICT (uid) DO NOTHING;", (data.uid, data.email))
 
         conn.commit()
-        return {"status": "success", "message": "User synced to Supabase successfully"}
+        return {"status": "success", "message": f"{data.role.capitalize()} synced to Supabase successfully"}
 
     except Exception as e:
         print(f"Database Error: {e}")
-        if conn:
-            conn.rollback()
+        if conn: conn.rollback()
         raise HTTPException(status_code=500, detail="Failed to sync user")
     finally:
-        if cursor:
-            cursor.close()
-        if conn:
-            conn.close()
+        if cursor: cursor.close()
+        if conn: conn.close()
