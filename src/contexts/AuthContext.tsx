@@ -23,29 +23,34 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       
       if (user) {
         try {
-          // 1. Try to fetch the official trusted role from the Python backend
           const API_BASE = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
           const res = await fetch(`${API_BASE}/api/patients/${user.uid}/role`);
           const data = await res.json();
           
-          if (res.ok && data.status === "success") {
+          // 🔥 CRITICAL FIX: Explicitly check that data.role is NOT null!
+          if (res.ok && data.status === "success" && data.role && data.role !== "null") {
             setUserRole(data.role);
-            localStorage.setItem("user_role", data.role); // Keep local storage in sync
+            localStorage.setItem("user_role", data.role); 
           } else {
-            // RACE CONDITION FIX: 
-            // If the DB says 404, it means Firebase logged them in before the Python /sync finished.
-            // We fall back to the temporary local storage saved by Signup.tsx!
-            const localRole = localStorage.getItem("user_role") as "patient" | "doctor" | "admin" | null;
-            setUserRole(localRole || "patient"); // Absolute fallback
+            // If the DB returned null, check local storage
+            let localRole = localStorage.getItem("user_role");
+            
+            // Purge bad local storage data if it exists
+            if (localRole === "null" || localRole === "undefined" || !localRole) {
+              localRole = "patient"; // Absolute final fallback
+            }
+            
+            setUserRole(localRole as "patient" | "doctor" | "admin");
           }
         } catch (error) {
           console.error("Failed to fetch user role:", error);
-          const localRole = localStorage.getItem("user_role") as "patient" | "doctor" | "admin" | null;
-          setUserRole(localRole || "patient");
+          let localRole = localStorage.getItem("user_role");
+          if (!localRole || localRole === "null") localRole = "patient";
+          setUserRole(localRole as "patient" | "doctor" | "admin");
         }
       } else {
         setUserRole(null);
-        localStorage.removeItem("user_role"); // Clear role on logout
+        localStorage.removeItem("user_role");
       }
       
       setIsLoading(false);
