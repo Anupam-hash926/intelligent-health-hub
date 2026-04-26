@@ -124,3 +124,112 @@ def get_patient_appointments(patient_id: str):
     finally:
         if cursor: cursor.close()
         if conn: conn.close()
+
+# ==========================================
+# FETCH SPECIFIC DOCTOR'S APPOINTMENTS (PHASE 1)
+# ==========================================
+@router.get("/doctor/{uid}/appointments")
+def get_doctor_appointments(uid: str):
+    conn = None
+    cursor = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Bridge the Firebase UID -> users table email -> doctors table doctor_id -> appointments
+        query = """
+            SELECT 
+                a.appointment_id, 
+                COALESCE(p.full_name, 'Unknown Patient') as patient_name, 
+                p.phone,
+                p.blood_group,
+                a.appointment_time, 
+                a.status
+            FROM appointments a
+            JOIN doctors d ON a.doctor_id::VARCHAR = d.doctor_id::VARCHAR
+            JOIN users u ON u.email = d.email
+            LEFT JOIN patient_profiles p ON a.patient_id = p.uid
+            WHERE u.uid = %s
+            ORDER BY a.appointment_time ASC;
+        """
+        cursor.execute(query, (uid,))
+        appointments = cursor.fetchall()
+
+        # Format datetime objects so React can read them
+        for apt in appointments:
+            if hasattr(apt['appointment_time'], 'strftime'):
+                apt['appointment_time'] = apt['appointment_time'].strftime("%b %d, %Y - %I:%M %p")
+                
+        return {"status": "success", "data": appointments}
+        
+    except Exception as e:
+        print(f"🔥 Error fetching appointments: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch appointments")
+    finally:
+        if cursor: cursor.close()
+        if conn: conn.close()
+
+# ==========================================
+# GET DOCTOR PROFILE (For Header & Settings)
+# ==========================================
+@router.get("/doctor/{uid}/profile")
+def get_doctor_profile(uid: str):
+    conn = None
+    cursor = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        query = """
+            SELECT full_name, phone, department 
+            FROM doctor_profiles 
+            WHERE uid = %s;
+        """
+        cursor.execute(query, (uid,))
+        profile = cursor.fetchone()
+        
+        return {"status": "success", "data": profile or {}}
+    except Exception as e:
+        print(f"🔥 Error fetching profile: {e}")
+        return {"status": "error", "data": {}}
+    finally:
+        if cursor: cursor.close()
+        if conn: conn.close()
+
+# ==========================================
+# UPDATE DOCTOR PROFILE
+# ==========================================
+class DoctorProfileUpdate(BaseModel):
+    full_name: str
+    phone: str
+    department: str
+
+@router.put("/doctor/{uid}/profile")
+def update_doctor_profile(uid: str, data: DoctorProfileUpdate):
+    conn = None
+    cursor = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # 1. Update the doctor_profiles table
+        query = """
+            UPDATE doctor_profiles 
+            SET full_name = %s, phone = %s, department = %s
+            WHERE uid = %s;
+        """
+        cursor.execute(query, (data.full_name, data.phone, data.department, uid))
+        
+        # 2. Sync the name/phone back to the main users table
+        cursor.execute("UPDATE users SET full_name = %s, phone = %s WHERE uid = %s;", 
+                      (data.full_name, data.phone, uid))
+        
+        conn.commit()
+        return {"status": "success", "message": "Profile updated successfully"}
+    except Exception as e:
+        print(f"🔥 Error updating profile: {e}")
+        if conn: conn.rollback()
+        raise HTTPException(status_code=500, detail="Failed to update profile")
+    finally:
+        if cursor: cursor.close()
+        if conn: conn.close()
