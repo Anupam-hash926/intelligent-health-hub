@@ -1,10 +1,12 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
+from typing import Optional
 import psycopg2
 import psycopg2.extras
 import os
 import heapq  
 from dotenv import load_dotenv
+from datetime import datetime, timezone
 
 load_dotenv()
 DB_URL = os.getenv("DATABASE_URL")
@@ -72,6 +74,37 @@ def book_appointment(data: AppointmentCreate):
     finally:
         if cursor: cursor.close()
         if conn: conn.close()
+
+# ==========================================
+# UPDATE APPOINTMENT STATUS (Fixes the Reschedule Bug)
+# ==========================================
+class UpdateStatusRequest(BaseModel):
+    status: str
+
+@router.put("/{appointment_id}/status")
+def update_appointment_status(appointment_id: int, request: UpdateStatusRequest):
+    conn = None
+    cursor = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        query = "UPDATE appointments SET status = %s WHERE appointment_id = %s"
+        cursor.execute(query, (request.status, appointment_id))
+        conn.commit()
+        
+        return {"status": "success", "message": "Appointment status updated successfully"}
+
+    except Exception as e:
+        print(f"🔥 STATUS UPDATE ERROR: {e}")
+        if conn:
+            conn.rollback()
+        raise HTTPException(status_code=500, detail="Failed to update appointment status")
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
 
 # ==========================================
 # GET APPOINTMENTS FOR PATIENT HISTORY TAB

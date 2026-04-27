@@ -66,6 +66,10 @@ const PatientDashboard = () => {
   const [historyData, setHistoryData] = useState<any[]>([]);
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
 
+  // --- NEW STATES FOR RESCHEDULING LOGIC ---
+  const [reschedulingId, setReschedulingId] = useState<number | null>(null);
+  const [locallyResolvedIds, setLocallyResolvedIds] = useState<number[]>([]);
+
   // Determine active tab based on URL
   useEffect(() => {
     const path = location.pathname;
@@ -108,12 +112,17 @@ const PatientDashboard = () => {
     }
   }, [activeTab, currentUser?.uid]);
 
-  const filteredHistory = historyData.filter(
-    (h) =>
+  // Apply search query filter AND hide locally resolved items
+  const filteredHistory = historyData.filter((h) => {
+    const recordId = h.appointment_id || h.id;
+    if (locallyResolvedIds.includes(recordId)) return false; // Hide if it was just rescheduled
+
+    return (
       (h.doctor && h.doctor.toLowerCase().includes(searchQuery.toLowerCase())) ||
       (h.diagnosis && h.diagnosis.toLowerCase().includes(searchQuery.toLowerCase())) ||
       (h.department && h.department.toLowerCase().includes(searchQuery.toLowerCase()))
-  );
+    );
+  });
 
   const handleSaveProfile = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -125,7 +134,6 @@ const PatientDashboard = () => {
       return;
     }
 
-    // --- FIX: Updated validation to require exactly 10 digits ---
     if (phone.length !== 10) {
       setProfileMessage("Error: Phone number must be exactly 10 digits.");
       return;
@@ -189,6 +197,7 @@ const PatientDashboard = () => {
           };
           const assignedDoctorId = deptToDoctorMap[selectedDept] || "1";
 
+          // 1. Create the new appointment
           await fetch("http://127.0.0.1:8000/api/appointments/book", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -201,6 +210,25 @@ const PatientDashboard = () => {
               no_show_risk: mlData.no_show_risk_percentage || 0
             })
           });
+
+          // --- FIX: 2. Handle the old appointment if we were rescheduling ---
+          if (reschedulingId !== null) {
+            // Optimistically hide the old card from the UI
+            setLocallyResolvedIds((prev) => [...prev, reschedulingId]);
+            
+            // Tell the backend the old appointment has been resolved/rescheduled
+            try {
+              await fetch(`http://127.0.0.1:8000/api/appointments/${reschedulingId}/status`, {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ status: "rescheduled" }) 
+              });
+            } catch (err) {
+              console.error("Failed to mark old appointment as rescheduled", err);
+            }
+            // Clear the tracking state
+            setReschedulingId(null);
+          }
 
           setBookingState("confirmed");
         } catch (err) {
@@ -217,6 +245,8 @@ const PatientDashboard = () => {
     setSelectedDept("");
     setSelectedDate("");
     setSelectedTime("");
+    setReschedulingId(null); // Clear reschedule state if cancelled mid-way
+    navigate("/patient");
   };
 
   return (
@@ -243,7 +273,13 @@ const PatientDashboard = () => {
           ].map((tab) => (
             <button
               key={tab.key}
-              onClick={() => navigate(tab.path)}
+              onClick={() => {
+                if (activeTab === "appointment" && tab.key !== "appointment") {
+                  setBookingState("idle"); 
+                  setReschedulingId(null); // Clear out if they navigate away
+                }
+                navigate(tab.path);
+              }}
               className={`flex items-center gap-2 px-4 py-2 rounded-t-lg text-sm font-medium transition-colors whitespace-nowrap ${
                 activeTab === tab.key
                   ? "bg-card text-primary border border-border border-b-0"
@@ -331,18 +367,16 @@ const PatientDashboard = () => {
                         <Label>Phone Number <span className="text-destructive">*</span></Label>
                         <Input 
                           type="tel" 
-                          placeholder="1234567890" // --- FIX: Updated placeholder ---
+                          placeholder="1234567890"
                           value={phone} 
                           onChange={(e) => {
                             const val = e.target.value;
-                            // --- FIX: Updated to allow up to 10 digits ---
                             if (/^\d*$/.test(val) && val.length <= 10) {
                               setPhone(val);
                             }
                           }} 
                           required 
                         />
-                        {/* --- FIX: Updated helper text --- */}
                         <p className="text-xs text-muted-foreground mt-1">Must be exactly 10 digits.</p>
                       </div>
                       <div className="space-y-2 md:col-span-2">
@@ -390,6 +424,15 @@ const PatientDashboard = () => {
             <AnimatePresence mode="wait">
               {bookingState === "idle" && (
                 <motion.form key="form" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onSubmit={handleBookAppointment} className="max-w-2xl space-y-6">
+                  {reschedulingId && (
+                    <div className="p-4 bg-warning/10 border border-warning/20 rounded-md text-warning flex items-center gap-3">
+                      <AlertTriangle className="h-5 w-5" />
+                      <div>
+                        <p className="font-bold text-sm">Rescheduling Appointment</p>
+                        <p className="text-xs">Your previous appointment has been dismissed by the administration due to high risk. Please select a new slot.</p>
+                      </div>
+                    </div>
+                  )}
                   <Card className="border-border">
                     <CardHeader><CardTitle className="text-lg">Schedule New Appointment</CardTitle></CardHeader>
                     <CardContent className="space-y-5">
@@ -425,7 +468,13 @@ const PatientDashboard = () => {
                 <div className="max-w-md mx-auto text-center py-16"><Loader2 className="h-12 w-12 animate-spin text-primary mx-auto mb-4" /><h3 className="text-xl font-bold">Processing...</h3></div>
               )}
               {bookingState === "confirmed" && (
-                <div className="max-w-md mx-auto text-center py-16"><div className="h-16 w-16 rounded-full bg-success/10 flex items-center justify-center mx-auto mb-4"><Check className="h-8 w-8 text-success" /></div><h3 className="text-xl font-bold">Confirmed!</h3><Button variant="outline" className="mt-6 w-full" onClick={resetBooking}>Back</Button></div>
+                <div className="max-w-md mx-auto text-center py-16">
+                  <div className="h-16 w-16 rounded-full bg-success/10 flex items-center justify-center mx-auto mb-4">
+                    <Check className="h-8 w-8 text-success" />
+                  </div>
+                  <h3 className="text-xl font-bold">Confirmed!</h3>
+                  <Button variant="outline" className="mt-6 w-full" onClick={resetBooking}>Return to History</Button>
+                </div>
               )}
             </AnimatePresence>
           </motion.div>
@@ -435,13 +484,43 @@ const PatientDashboard = () => {
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-4">
              {isLoadingHistory ? <Loader2 className="animate-spin mx-auto mt-10" /> : 
               <div className="grid gap-3">
-                {filteredHistory.map((record) => (
-                   record.status === "reschedule_requested" ? (
-                    <Card key={record.id} className="border-destructive bg-destructive/5"><CardContent className="p-4 flex flex-col md:flex-row items-center justify-between gap-3"><div className="flex gap-3"><AlertTriangle className="text-destructive h-5 w-5 mt-1" /><div><p className="font-bold text-destructive">Reschedule Needed</p><p className="text-sm">High no-show risk detected for {record.department}.</p></div></div><Button variant="outline" onClick={() => setActiveTab("appointment")}>Reschedule</Button></CardContent></Card>
+                {filteredHistory.map((record) => {
+                   const recordId = record.appointment_id || record.id;
+                   
+                   return record.status === "reschedule_requested" ? (
+                    <Card key={recordId} className="border-destructive bg-destructive/5">
+                      <CardContent className="p-4 flex flex-col md:flex-row items-center justify-between gap-3">
+                        <div className="flex gap-3">
+                          <AlertTriangle className="text-destructive h-5 w-5 mt-1" />
+                          <div>
+                            <p className="font-bold text-destructive">Reschedule Needed</p>
+                            <p className="text-sm">High no-show risk detected for {record.department}.</p>
+                          </div>
+                        </div>
+                        <Button 
+                          variant="outline" 
+                          onClick={() => {
+                            // --- FIX: Store the ID we are fixing, then navigate ---
+                            setReschedulingId(recordId);
+                            navigate("/patient/appointment");
+                          }}
+                        >
+                          Reschedule
+                        </Button>
+                      </CardContent>
+                    </Card>
                    ) : (
-                    <Card key={record.id} className="border-border"><CardContent className="p-4 flex justify-between items-center"><div><p className="font-semibold">{record.diagnosis || "Consultation"}</p><p className="text-sm text-muted-foreground">{record.doctor} · {record.department}</p></div><Badge>{record.status}</Badge></CardContent></Card>
+                    <Card key={recordId} className="border-border">
+                      <CardContent className="p-4 flex justify-between items-center">
+                        <div>
+                          <p className="font-semibold">{record.diagnosis || "Consultation"}</p>
+                          <p className="text-sm text-muted-foreground">{record.doctor} · {record.department}</p>
+                        </div>
+                        <Badge>{record.status}</Badge>
+                      </CardContent>
+                    </Card>
                    )
-                ))}
+                })}
               </div>
              }
           </motion.div>

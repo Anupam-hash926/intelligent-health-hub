@@ -23,16 +23,16 @@ const navItems = [
 ];
 
 const dummyDoctors = [
-  { id: 1, name: "Dr. Sarah Chen", dept: "Cardiology", email: "schen@med.com", phone: "+1-555-0101", status: "Active" },
-  { id: 2, name: "Dr. James Wilson", dept: "General Medicine", email: "jwilson@med.com", phone: "+1-555-0102", status: "Active" },
-  { id: 3, name: "Dr. Emily Park", dept: "Orthopedics", email: "epark@med.com", phone: "+1-555-0103", status: "On Leave" },
-  { id: 4, name: "Dr. Michael Ross", dept: "Dermatology", email: "mross@med.com", phone: "+1-555-0104", status: "Active" },
+  { id: 1, name: "Dr. Sarah Chen", dept: "Cardiology", email: "schen@med.com", phone: "5551230101", status: "Active" },
+  { id: 2, name: "Dr. James Wilson", dept: "General Medicine", email: "jwilson@med.com", phone: "5551230102", status: "Active" },
+  { id: 3, name: "Dr. Emily Park", dept: "Orthopedics", email: "epark@med.com", phone: "5551230103", status: "On Leave" },
+  { id: 4, name: "Dr. Michael Ross", dept: "Dermatology", email: "mross@med.com", phone: "5551230104", status: "Active" },
 ];
 
 const dummyPatients = [
-  { id: 1, name: "John Davis", dept: "Cardiology", age: 45, email: "jdavis@mail.com", phone: "+1-555-0201", status: "Active" },
-  { id: 2, name: "Maria Garcia", dept: "Cardiology", age: 62, email: "mgarcia@mail.com", phone: "+1-555-0202", status: "Admitted" },
-  { id: 3, name: "Tom Brown", dept: "Emergency", age: 58, email: "tbrown@mail.com", phone: "+1-555-0203", status: "Critical" },
+  { id: 1, name: "John Davis", dept: "Cardiology", age: 45, email: "jdavis@mail.com", phone: "5551230201", status: "Active" },
+  { id: 2, name: "Maria Garcia", dept: "Cardiology", age: 62, email: "mgarcia@mail.com", phone: "5551230202", status: "Admitted" },
+  { id: 3, name: "Tom Brown", dept: "Emergency", age: 58, email: "tbrown@mail.com", phone: "5551230203", status: "Critical" },
 ];
 
 const allDepartments = ["Cardiology", "General Medicine", "Orthopedics", "Dermatology", "Neurology", "Pediatrics", "Emergency"];
@@ -48,7 +48,6 @@ const AdminDashboard = () => {
   const [allocatingBed, setAllocatingBed] = useState<number | null>(null);
   const [selectedBedForAllocation, setSelectedBedForAllocation] = useState<number | null>(null);
   const [allocateForm, setAllocateForm] = useState({ patientId: "" });
-  const [directoryTab, setDirectoryTab] = useState<"patients" | "doctors">("patients");
   const [searchDir, setSearchDir] = useState("");
   const [showAddForm, setShowAddForm] = useState(false);
   const [selectedDept, setSelectedDept] = useState<string>("All");
@@ -57,6 +56,9 @@ const AdminDashboard = () => {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [formData, setFormData] = useState({ name: "", email: "", phone: "", department: "", age: "", status: "Active" });
   const [appointments, setAppointments] = useState<any[]>([]);
+  
+  // State to track which appointment is actively saving to the database
+  const [processingTriageId, setProcessingTriageId] = useState<number | null>(null);
 
   // --- UPDATED: GLOBAL RECORDS SEARCH STATES ---
   const [records, setRecords] = useState<any[]>([]);
@@ -114,17 +116,16 @@ const AdminDashboard = () => {
     }
   };
 
-  // --- Handle Phone Lookup Function ---
-  const handlePhoneLookup = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!lookupPhone.trim()) return;
+  // --- Dynamic Phone Lookup Function ---
+  const performPhoneLookup = async (phoneToSearch: string) => {
+    if (phoneToSearch.length !== 10) return;
     
     setIsLookingUp(true);
     setLookupResult(null);
     
     try {
       const API_BASE = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
-      const res = await fetch(`${API_BASE}/api/admin/patient-lookup?phone=${encodeURIComponent(lookupPhone.trim())}`);
+      const res = await fetch(`${API_BASE}/api/admin/patient-lookup?phone=${encodeURIComponent(phoneToSearch)}`);
       const data = await res.json();
       
       if (res.ok && data.status === "success") {
@@ -181,17 +182,39 @@ const AdminDashboard = () => {
     handleSearch(); // Fetch all records on initial load
   }, []);
 
+  // --- FIXED: Reliable Database-First Triage Action ---
   const handleTriageAction = async (appointmentId: number, actionType: "confirm" | "double_book" | "dismiss") => {
+    setProcessingTriageId(appointmentId); // Starts the loading spinner
+    
     try {
       const API_BASE = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
-      await fetch(`${API_BASE}/api/admin/appointments/${appointmentId}/action`, {
+      
+      // 1. Wait for the database to process and return a success response
+      const res = await fetch(`${API_BASE}/api/admin/appointments/${appointmentId}/action`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: actionType }),
       });
-      fetchAppointments();
+
+      if (!res.ok) {
+        throw new Error("Database failed to process the request.");
+      }
+
+      // 2. Only AFTER database success do we remove the card from the screen
+      setAppointments((prev) => prev.filter((apt) => apt.appointment_id !== appointmentId));
+      
+      // 3. Trigger the success toast
+      const actionMessage = actionType === "double_book" ? "Double-booked" : actionType === "confirm" ? "Confirmed" : "Dismissed";
+      toast.success(`Appointment ${actionMessage} successfully.`);
+      
+      // Update global records silently in the background
+      handleSearch();
+
     } catch (err) {
       console.error("Action failed", err);
+      toast.error("Failed to update database. Please check your connection.");
+    } finally {
+      setProcessingTriageId(null); // Stop the loading spinner
     }
   };
 
@@ -244,44 +267,39 @@ const AdminDashboard = () => {
   const handleAddOrEdit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!formData.name || !formData.email || !formData.phone || !formData.department) return;
+    
+    // Strict 10-digit validation
+    if (formData.phone.length !== 10) {
+      toast.error("Phone number must be exactly 10 digits.");
+      return;
+    }
+
     if (editingId !== null) {
-      if (directoryTab === "patients") {
-        setPatients(patients.map(p => p.id === editingId ? { ...p, name: formData.name, email: formData.email, phone: formData.phone, dept: formData.department, age: parseInt(formData.age) || 0, status: formData.status } : p));
-      } else {
-        setDoctors(doctors.map(d => d.id === editingId ? { ...d, name: formData.name, email: formData.email, phone: formData.phone, dept: formData.department, status: formData.status } : d));
-      }
+      setDoctors(doctors.map(d => d.id === editingId ? { ...d, name: formData.name, email: formData.email, phone: formData.phone, dept: formData.department, status: formData.status } : d));
       setEditingId(null);
     } else {
-      const newId = Math.max(...(directoryTab === "patients" ? patients : doctors).map(i => i.id), 0) + 1;
-      if (directoryTab === "patients") {
-        setPatients([...patients, { id: newId, name: formData.name, email: formData.email, phone: formData.phone, dept: formData.department, age: parseInt(formData.age) || 0, status: formData.status }]);
-      } else {
-        setDoctors([...doctors, { id: newId, name: formData.name, email: formData.email, phone: formData.phone, dept: formData.department, status: formData.status }]);
-      }
+      const newId = Math.max(...doctors.map(i => i.id), 0) + 1;
+      setDoctors([...doctors, { id: newId, name: formData.name, email: formData.email, phone: formData.phone, dept: formData.department, status: formData.status }]);
     }
     setFormData({ name: "", email: "", phone: "", department: "", age: "", status: "Active" });
     setShowAddForm(false);
   };
 
   const handleDelete = (id: number) => {
-    if (directoryTab === "patients") {
-      setPatients(patients.filter(p => p.id !== id));
-    } else {
-      setDoctors(doctors.filter(d => d.id !== id));
-    }
+    setDoctors(doctors.filter(d => d.id !== id));
   };
 
   const handleEdit = (id: number) => {
-    const item = directoryTab === "patients" ? patients.find(p => p.id === id) : doctors.find(d => d.id === id);
+    const item = doctors.find(d => d.id === id);
     if (item) {
-      setFormData({ name: item.name, email: item.email, phone: item.phone, department: item.dept, age: "age" in item ? (item as any).age.toString() : "", status: item.status });
+      setFormData({ name: item.name, email: item.email, phone: item.phone, department: item.dept, age: "", status: item.status });
       setEditingId(id);
       setShowAddForm(true);
     }
   };
 
   const filteredDoctors = doctors.filter(d => (selectedDept === "All" || d.dept === selectedDept) && d.name.toLowerCase().includes(searchDir.toLowerCase()));
-  const filteredPatients = patients.filter(p => (selectedDept === "All" || p.dept === selectedDept) && p.name.toLowerCase().includes(searchDir.toLowerCase()));
+  const matchingPatients = patients.filter(p => p.phone.includes(lookupPhone));
 
   return (
     <DashboardLayout navItems={navItems} role="Admin">
@@ -411,13 +429,34 @@ const AdminDashboard = () => {
                       </div>
 
                       <div className="flex flex-col sm:flex-row md:flex-col lg:flex-row gap-2">
-                        <Button size="sm" variant="outline" className="border-success text-success hover:bg-success/10" onClick={() => handleTriageAction(apt.appointment_id, "confirm")}>
+                        <Button 
+                          size="sm" 
+                          variant="outline" 
+                          className="border-success text-success hover:bg-success/10" 
+                          disabled={processingTriageId === apt.appointment_id}
+                          onClick={() => handleTriageAction(apt.appointment_id, "confirm")}
+                        >
+                          {processingTriageId === apt.appointment_id ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : null}
                           Confirm Slot
                         </Button>
-                        <Button size="sm" variant="outline" className="border-warning text-warning hover:bg-warning/10" onClick={() => handleTriageAction(apt.appointment_id, "double_book")}>
+                        <Button 
+                          size="sm" 
+                          variant="outline" 
+                          className="border-warning text-warning hover:bg-warning/10" 
+                          disabled={processingTriageId === apt.appointment_id}
+                          onClick={() => handleTriageAction(apt.appointment_id, "double_book")}
+                        >
+                          {processingTriageId === apt.appointment_id ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : null}
                           Double Book
                         </Button>
-                        <Button size="sm" variant="outline" className="border-destructive text-destructive hover:bg-destructive/10" onClick={() => handleTriageAction(apt.appointment_id, "dismiss")}>
+                        <Button 
+                          size="sm" 
+                          variant="outline" 
+                          className="border-destructive text-destructive hover:bg-destructive/10" 
+                          disabled={processingTriageId === apt.appointment_id}
+                          onClick={() => handleTriageAction(apt.appointment_id, "dismiss")}
+                        >
+                          {processingTriageId === apt.appointment_id ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : null}
                           Dismiss
                         </Button>
                       </div>
@@ -528,19 +567,61 @@ const AdminDashboard = () => {
                 </CardTitle>
               </CardHeader>
               <CardContent>
-                <form onSubmit={handlePhoneLookup} className="flex flex-col sm:flex-row gap-4 items-end max-w-xl">
-                  <div className="w-full space-y-2">
-                    <Label>Registered Phone Number</Label>
+                <div className="relative w-full max-w-md">
+                  <Label className="mb-2 block">Registered Phone Number</Label>
+                  <div className="relative">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                     <Input 
-                      placeholder="e.g. +1-555-0192" 
+                      type="tel"
+                      placeholder="Enter 10-digit phone number..." 
+                      className="pl-9"
                       value={lookupPhone} 
-                      onChange={(e) => setLookupPhone(e.target.value)}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        if (/^\d*$/.test(val) && val.length <= 10) {
+                          setLookupPhone(val);
+                          
+                          if (val.length < 10) {
+                            setLookupResult(null); // Clear previous result while typing
+                          }
+                          
+                          if (val.length === 10) {
+                            performPhoneLookup(val); // Auto-trigger search at exactly 10 digits
+                          }
+                        }
+                      }}
                     />
+                    {isLookingUp && (
+                      <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 animate-spin text-muted-foreground" />
+                    )}
                   </div>
-                  <Button type="submit" disabled={isLookingUp || !lookupPhone} className="w-full sm:w-auto px-8">
-                    {isLookingUp ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : "Search"}
-                  </Button>
-                </form>
+                  
+                  {/* Dynamic Suggestions Dropdown */}
+                  {lookupPhone.length > 0 && lookupPhone.length < 10 && (
+                    <div className="absolute z-10 w-full mt-1 bg-card border border-border rounded-md shadow-lg overflow-hidden">
+                      {matchingPatients.length > 0 ? (
+                        matchingPatients.map(p => (
+                          <div 
+                            key={p.id} 
+                            className="px-4 py-2 text-sm hover:bg-muted cursor-pointer flex justify-between items-center transition-colors"
+                            onClick={() => {
+                              setLookupPhone(p.phone);
+                              performPhoneLookup(p.phone);
+                            }}
+                          >
+                            <span className="font-medium text-foreground">{p.phone}</span>
+                            <span className="text-muted-foreground">{p.name}</span>
+                          </div>
+                        ))
+                      ) : (
+                        <div className="px-4 py-3 text-sm text-muted-foreground text-center">
+                          Keep typing for a full 10-digit search...
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+                <p className="text-xs text-muted-foreground mt-2">Details will automatically load once 10 digits are entered.</p>
               </CardContent>
             </Card>
 
@@ -556,7 +637,6 @@ const AdminDashboard = () => {
                     </div>
                   </div>
                   <CardContent className="p-6">
-                    {/* CHANGED FROM 3 COLUMNS TO 4 COLUMNS */}
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
                       <div className="space-y-1">
                         <Label className="text-xs text-muted-foreground uppercase tracking-wider">Contact Info</Label>
@@ -576,7 +656,6 @@ const AdminDashboard = () => {
                         <p className="text-sm text-muted-foreground">Distance: {lookupResult.distance_miles ? `${lookupResult.distance_miles} miles` : "N/A"}</p>
                       </div>
 
-                      {/* --- NEW ACCOUNT HISTORY BLOCK --- */}
                       <div className="space-y-1">
                         <Label className="text-xs text-muted-foreground uppercase tracking-wider">Account History</Label>
                         <p className="font-medium flex items-center gap-2">
@@ -673,15 +752,12 @@ const AdminDashboard = () => {
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-4">
             <div className="flex items-center justify-between flex-wrap gap-3">
               <div className="flex gap-2">
-                <Button variant={directoryTab === "patients" ? "default" : "outline"} size="sm" onClick={() => { setDirectoryTab("patients"); setSearchDir(""); setSelectedDept("All"); }}>
-                  <Users className="h-4 w-4 mr-1" /> Patients ({patients.length})
-                </Button>
-                <Button variant={directoryTab === "doctors" ? "default" : "outline"} size="sm" onClick={() => { setDirectoryTab("doctors"); setSearchDir(""); setSelectedDept("All"); }}>
+                <Button variant="default" size="sm" onClick={() => { setSearchDir(""); setSelectedDept("All"); }}>
                   <Stethoscope className="h-4 w-4 mr-1" /> Doctors ({doctors.length})
                 </Button>
               </div>
               <Button size="sm" onClick={() => { setShowAddForm(!showAddForm); setEditingId(null); setFormData({ name: "", email: "", phone: "", department: "", age: "", status: "Active" }); }}>
-                <Plus className="h-4 w-4 mr-1" /> Add {directoryTab === "patients" ? "Patient" : "Doctor"}
+                <Plus className="h-4 w-4 mr-1" /> Add Doctor
               </Button>
             </div>
 
@@ -689,7 +765,7 @@ const AdminDashboard = () => {
               <Card className="border-border">
                 <CardHeader className="pb-2">
                   <div className="flex items-center justify-between">
-                    <CardTitle className="text-sm">{editingId ? "Edit" : "Add New"} {directoryTab === "patients" ? "Patient" : "Doctor"}</CardTitle>
+                    <CardTitle className="text-sm">{editingId ? "Edit" : "Add New"} Doctor</CardTitle>
                     <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => { setShowAddForm(false); setEditingId(null); setFormData({ name: "", email: "", phone: "", department: "", age: "", status: "Active" }); }}>
                       <X className="h-3 w-3" />
                     </Button>
@@ -707,7 +783,20 @@ const AdminDashboard = () => {
                     </div>
                     <div className="space-y-1">
                       <Label className="text-xs">Phone</Label>
-                      <Input placeholder="+1-555-..." className="h-8 text-sm" value={formData.phone} onChange={(e) => setFormData({ ...formData, phone: e.target.value })} required />
+                      <Input 
+                        type="tel"
+                        placeholder="1234567890" 
+                        className="h-8 text-sm" 
+                        value={formData.phone} 
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          if (/^\d*$/.test(val) && val.length <= 10) {
+                            setFormData({ ...formData, phone: val });
+                          }
+                        }} 
+                        required 
+                      />
+                      <p className="text-[10px] text-muted-foreground mt-1">10 digits required.</p>
                     </div>
                     <div className="space-y-1">
                       <Label className="text-xs">Department</Label>
@@ -716,12 +805,6 @@ const AdminDashboard = () => {
                         {allDepartments.map(d => <option key={d} value={d}>{d}</option>)}
                       </select>
                     </div>
-                    {directoryTab === "patients" && (
-                      <div className="space-y-1">
-                        <Label className="text-xs">Age</Label>
-                        <Input type="number" placeholder="Age" className="h-8 text-sm" value={formData.age} onChange={(e) => setFormData({ ...formData, age: e.target.value })} />
-                      </div>
-                    )}
                     <div className="space-y-1">
                       <Label className="text-xs">Status</Label>
                       <select className="w-full h-8 rounded-md border border-input bg-background px-2 text-sm text-foreground" value={formData.status} onChange={(e) => setFormData({ ...formData, status: e.target.value })}>
@@ -749,13 +832,13 @@ const AdminDashboard = () => {
               </div>
               <select className="h-9 rounded-md border border-input bg-background px-3 text-sm text-foreground" value={selectedDept} onChange={(e) => setSelectedDept(e.target.value)}>
                 <option value="All">All Departments</option>
-                {allDepartments.map(d => <option key={d} value={d}>{d} ({getDeptCount(d, directoryTab === "patients" ? patients : doctors)})</option>)}
+                {allDepartments.map(d => <option key={d} value={d}>{d} ({getDeptCount(d, doctors)})</option>)}
               </select>
             </div>
 
             <div className="flex flex-wrap gap-2">
               {allDepartments.map(dept => {
-                const count = getDeptCount(dept, directoryTab === "patients" ? patients : doctors);
+                const count = getDeptCount(dept, doctors);
                 if (count === 0) return null;
                 return (
                   <Badge key={dept} variant="secondary" className={`cursor-pointer ${selectedDept === dept ? "bg-primary text-primary-foreground" : ""}`} onClick={() => setSelectedDept(selectedDept === dept ? "All" : dept)}>
@@ -774,19 +857,17 @@ const AdminDashboard = () => {
                       <th className="text-left p-3 font-semibold text-muted-foreground">Department</th>
                       <th className="text-left p-3 font-semibold text-muted-foreground hidden md:table-cell">Email</th>
                       <th className="text-left p-3 font-semibold text-muted-foreground hidden sm:table-cell">Phone</th>
-                      {directoryTab === "patients" && <th className="text-left p-3 font-semibold text-muted-foreground">Age</th>}
                       <th className="text-left p-3 font-semibold text-muted-foreground">Status</th>
                       <th className="text-right p-3 font-semibold text-muted-foreground">Actions</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {(directoryTab === "patients" ? filteredPatients : filteredDoctors).map((item) => (
+                    {filteredDoctors.map((item) => (
                       <tr key={item.id} className="border-b border-border hover:bg-muted/30 transition-colors">
                         <td className="p-3 font-medium text-foreground">{item.name}</td>
                         <td className="p-3 text-muted-foreground">{item.dept}</td>
                         <td className="p-3 text-muted-foreground hidden md:table-cell">{item.email}</td>
                         <td className="p-3 text-muted-foreground hidden sm:table-cell">{item.phone}</td>
-                        {directoryTab === "patients" && <td className="p-3 text-muted-foreground">{"age" in item ? (item as { age: number }).age : ""}</td>}
                         <td className="p-3">
                           <Badge variant={item.status === "Active" ? "secondary" : item.status === "Critical" ? "destructive" : item.status === "Admitted" ? "default" : "outline"} className="text-[10px]">
                             {item.status}

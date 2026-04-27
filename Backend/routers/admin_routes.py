@@ -7,7 +7,6 @@ import os
 from dotenv import load_dotenv
 from datetime import datetime, timezone
 
-
 load_dotenv()
 DB_URL = os.getenv("DATABASE_URL")
 
@@ -31,7 +30,7 @@ def get_all_appointments():
         # 1. Casts appointment_time to String so React can read it safely
         # 2. Casts no_show_risk to Float
         # 3. Uses COALESCE to fallback to "Mock Patient XXXX" if they aren't a real registered user
-        # 4. Uses ILIKE to catch any capitalization of "scheduled"
+        # 4. STRICT FILTER: Only exactly 'scheduled' and NOT overbooked. Fixes the ILIKE '%schedule%' bug!
         # 5. Added a CASE statement to map doctor_id to doctor_name dynamically
         query = """
             SELECT 
@@ -55,7 +54,7 @@ def get_all_appointments():
                 COALESCE(p.phone, 'No Phone') as phone
             FROM appointments a
             LEFT JOIN patient_profiles p ON a.patient_id = p.uid
-            WHERE a.status ILIKE '%schedule%'
+            WHERE a.status = 'scheduled' AND (a.is_overbooked IS NULL OR a.is_overbooked = FALSE)
             ORDER BY a.appointment_time ASC;
         """
         cursor.execute(query)
@@ -108,7 +107,6 @@ def handle_appointment_action(appointment_id: int, request: AdminAction):
         return {"status": "success", "message": message}
 
     except Exception as e:
-        # --- THIS IS THE MAGIC LINE TO CATCH THE BUG ---
         print(f"🔥 ADMIN BUTTON ERROR: {e}")
         
         if conn:
@@ -120,9 +118,6 @@ def handle_appointment_action(appointment_id: int, request: AdminAction):
         if conn:
             conn.close()
 
-# ==========================================
-# 3. GLOBAL HOSPITAL RECORDS (SEARCH BY NAME)
-# ==========================================
 # ==========================================
 # 3. GLOBAL HOSPITAL RECORDS (SEARCH BY NAME)
 # ==========================================
@@ -196,6 +191,7 @@ def get_hospital_records(name: Optional[str] = None, months: Optional[str] = Non
     finally:
         if cursor: cursor.close()
         if conn: conn.close()
+
 # ==========================================
 # 4. PATIENT LOOKUP BY PHONE (FETCHING ACCOUNT HISTORY)
 # ==========================================
