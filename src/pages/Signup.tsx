@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { motion } from "framer-motion";
-import { Activity, Mail, Lock, ArrowRight, User, Stethoscope, ShieldCheck, ArrowLeft, Loader2 } from "lucide-react";
+import { Activity, Mail, Lock, ArrowRight, ArrowLeft, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -12,12 +12,6 @@ import { createUserWithEmailAndPassword } from "firebase/auth";
 import { auth } from "@/lib/firebase"; 
 
 type Role = "patient" | "doctor" | "admin";
-
-const roles: { key: Role; label: string; icon: React.ElementType; desc: string }[] = [
-  { key: "patient", label: "Patient", icon: User, desc: "Access your records & appointments" },
-  { key: "doctor", label: "Doctor", icon: Stethoscope, desc: "Manage patients & schedules" },
-  { key: "admin", label: "Admin", icon: ShieldCheck, desc: "Full system administration" },
-];
 
 const Signup = () => {
   const [selectedRole, setSelectedRole] = useState<Role>("patient");
@@ -46,12 +40,17 @@ const Signup = () => {
 
     setIsLoading(true);
 
+    // 🔥 CRITICAL BUG FIX: 
+    // Save the role to local storage BEFORE Firebase creates the account!
+    // This ensures that when the login listener wakes up, it instantly knows who you are.
+    localStorage.setItem("user_role", selectedRole);
+
     try {
       // 2. Tell Firebase to create this new user!
       const userCredential = await createUserWithEmailAndPassword(auth, email, password);
       const user = userCredential.user;
 
-      // --- NEW: Sync user to Supabase Database via Python Backend ---
+      // 3. Sync user to Database via Python Backend
       try {
         await fetch("http://127.0.0.1:8000/api/patients/sync", {
           method: "POST",
@@ -64,15 +63,10 @@ const Signup = () => {
         });
       } catch (syncError) {
         console.error("Warning: Could not sync to Supabase right now", syncError);
-        // We still let them log in, but log the error for the admins!
       }
-      // -------------------------------------------------------------
-
-      // 3. Success! Save role locally (Person 3 will link this fully to Supabase later)
-      localStorage.setItem("user_role", selectedRole);
       
       toast.success("Account created successfully!", {
-        description: "Welcome to MedFlowAI. Redirecting...",
+        description: `Welcome to MedFlowAI as a ${selectedRole}. Redirecting...`,
       });
       
       // 4. Send them to their specific dashboard
@@ -90,6 +84,8 @@ const Signup = () => {
       } else {
         toast.error("Failed to create account. Please try again.");
       }
+      // If it failed, clear the local storage so it doesn't mess up future logins
+      localStorage.removeItem("user_role");
     } finally {
       setIsLoading(false);
     }
@@ -138,34 +134,23 @@ const Signup = () => {
           <h1 className="text-3xl font-display font-extrabold text-foreground mb-2">Create an Account</h1>
           <p className="text-muted-foreground mb-8">Sign up to get started with our platform</p>
 
-          {/* Role selector */}
-          <div className="grid grid-cols-3 gap-3 mb-6">
-            {roles.map((role) => (
-              <button
-                key={role.key}
-                type="button"
-                onClick={() => setSelectedRole(role.key)}
-                className={`relative rounded-xl p-4 text-center transition-all duration-300 border-2 cursor-pointer ${
-                  selectedRole === role.key
-                    ? "border-primary bg-secondary shadow-glow"
-                    : "border-border bg-card hover:border-primary/30"
-                }`}
-              >
-                <role.icon
-                  className={`h-6 w-6 mx-auto mb-2 transition-colors ${
-                    selectedRole === role.key ? "text-primary" : "text-muted-foreground"
-                  }`}
-                />
-                <p className={`text-sm font-semibold ${
-                  selectedRole === role.key ? "text-primary" : "text-foreground"
-                }`}>
-                  {role.label}
-                </p>
-              </button>
-            ))}
-          </div>
-
           <form onSubmit={handleSubmit} className="space-y-4">
+            
+            {/* UPDATED: Classic Select Dropdown for Role */}
+            <div className="space-y-2 mb-2">
+              <Label htmlFor="role" className="text-foreground font-medium">Account Type</Label>
+              <select
+                id="role"
+                value={selectedRole}
+                onChange={(e) => setSelectedRole(e.target.value as Role)}
+                className="w-full h-11 rounded-md border border-input bg-background px-3 text-sm text-foreground focus:ring-2 focus:ring-primary outline-none"
+              >
+                <option value="patient">Patient Portal</option>
+                <option value="doctor">Doctor Portal</option>
+                <option value="admin">System Administrator</option>
+              </select>
+            </div>
+
             <div className="space-y-2">
               <Label htmlFor="email" className="text-foreground font-medium">Email</Label>
               <div className="relative">
@@ -214,7 +199,7 @@ const Signup = () => {
               </div>
             </div>
 
-            <Button type="submit" variant="hero" size="lg" className="w-full text-base py-6 mt-2" disabled={isLoading}>
+            <Button type="submit" variant="hero" size="lg" className="w-full text-base py-6 mt-4" disabled={isLoading}>
               {isLoading ? (
                 <Loader2 className="h-5 w-5 animate-spin mx-auto" />
               ) : (
