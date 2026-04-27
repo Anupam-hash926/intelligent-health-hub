@@ -61,7 +61,7 @@ const PatientDashboard = () => {
   
   const [profileMessage, setProfileMessage] = useState("");
   const [isSavingProfile, setIsSavingProfile] = useState(false);
-  const [isProfileLoading, setIsProfileLoading] = useState(true); // --- NEW: Profile loading state ---
+  const [isProfileLoading, setIsProfileLoading] = useState(true);
 
   const [historyData, setHistoryData] = useState<any[]>([]);
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
@@ -79,7 +79,7 @@ const PatientDashboard = () => {
   useEffect(() => {
     if (!currentUser?.uid) return;
 
-    setIsProfileLoading(true); // Start loading
+    setIsProfileLoading(true);
     fetch(`http://127.0.0.1:8000/api/patients/${currentUser.uid}/profile`)
       .then(res => res.json())
       .then(data => {
@@ -91,7 +91,7 @@ const PatientDashboard = () => {
         if (data.blood_group) setBloodGroup(data.blood_group);
       })
       .catch(err => console.error("Could not fetch profile", err))
-      .finally(() => setIsProfileLoading(false)); // Stop loading when done
+      .finally(() => setIsProfileLoading(false));
   }, [currentUser?.uid]);
 
   // Fetch History Data ONLY when on History tab
@@ -125,8 +125,9 @@ const PatientDashboard = () => {
       return;
     }
 
-    if (phone.length !== 9) {
-      setProfileMessage("Error: Phone number must be exactly 9 digits.");
+    // --- FIX: Updated validation to require exactly 10 digits ---
+    if (phone.length !== 10) {
+      setProfileMessage("Error: Phone number must be exactly 10 digits.");
       return;
     }
 
@@ -224,7 +225,6 @@ const PatientDashboard = () => {
         <div>
           <h1 className="text-2xl md:text-3xl font-display font-bold text-foreground">
             Welcome back,{" "}
-            {/* --- FIX: Skeleton Loader while fetching --- */}
             {isProfileLoading ? (
               <span className="inline-block h-8 w-32 md:w-48 bg-muted animate-pulse rounded-md align-middle"></span>
             ) : (
@@ -331,17 +331,19 @@ const PatientDashboard = () => {
                         <Label>Phone Number <span className="text-destructive">*</span></Label>
                         <Input 
                           type="tel" 
-                          placeholder="123456789"
+                          placeholder="1234567890" // --- FIX: Updated placeholder ---
                           value={phone} 
                           onChange={(e) => {
                             const val = e.target.value;
-                            if (/^\d*$/.test(val) && val.length <= 9) {
+                            // --- FIX: Updated to allow up to 10 digits ---
+                            if (/^\d*$/.test(val) && val.length <= 10) {
                               setPhone(val);
                             }
                           }} 
                           required 
                         />
-                        <p className="text-xs text-muted-foreground mt-1">Must be exactly 9 digits.</p>
+                        {/* --- FIX: Updated helper text --- */}
+                        <p className="text-xs text-muted-foreground mt-1">Must be exactly 10 digits.</p>
                       </div>
                       <div className="space-y-2 md:col-span-2">
                         <Label>Distance to Hospital (miles) <span className="text-destructive">*</span></Label>
