@@ -52,6 +52,10 @@ const PatientDashboard = () => {
   const [selectedTime, setSelectedTime] = useState("");
   const [bookingState, setBookingState] = useState<"idle" | "checking" | "confirmed" | "alternate">("idle");
 
+  // --- NEW STATES FOR PHASE 2 TRIAGE ---
+  const [currentSymptom, setCurrentSymptom] = useState("");
+  const [medicalRecord, setMedicalRecord] = useState<File | null>(null);
+
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
@@ -115,7 +119,7 @@ const PatientDashboard = () => {
   // Apply search query filter AND hide locally resolved items
   const filteredHistory = historyData.filter((h) => {
     const recordId = h.appointment_id || h.id;
-    if (locallyResolvedIds.includes(recordId)) return false; // Hide if it was just rescheduled
+    if (locallyResolvedIds.includes(recordId)) return false; 
 
     return (
       (h.doctor && h.doctor.toLowerCase().includes(searchQuery.toLowerCase())) ||
@@ -176,47 +180,37 @@ const PatientDashboard = () => {
     setBookingState("checking");
 
     try {
-      const today = new Date();
-      const appointmentDate = new Date(selectedDate);
-      const leadTimeDays = Math.ceil(Math.abs(appointmentDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+      const combinedDateTime = `${selectedDate} ${selectedTime}`; 
+      const deptToDoctorMap: Record<string, string> = {
+        "Cardiology": "1", "General Medicine": "2", "Orthopedics": "3",
+        "Dermatology": "4", "Neurology": "5", "Pediatrics": "6",
+      };
+      const assignedDoctorId = deptToDoctorMap[selectedDept] || "1";
 
-      const mlResponse = await fetch(`http://127.0.0.1:8000/api/ml/${currentUser.uid}/predict-noshow`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ lead_time_days: leadTimeDays }),
-      });
-
-      const mlData = await mlResponse.json();
+      // --- PHASE 2: Build the Multipart Form Data Payload ---
+      const formData = new FormData();
+      formData.append("patient_id", currentUser.uid);
+      formData.append("doctor_id", assignedDoctorId);
+      formData.append("appointment_time", combinedDateTime);
+      formData.append("current_symptom", currentSymptom);
       
+      if (medicalRecord) {
+        formData.append("file", medicalRecord);
+      }
+
       setTimeout(async () => {
         try {
-          const combinedDateTime = `${selectedDate} ${selectedTime}`; 
-          const deptToDoctorMap: Record<string, string> = {
-            "Cardiology": "1", "General Medicine": "2", "Orthopedics": "3",
-            "Dermatology": "4", "Neurology": "5", "Pediatrics": "6",
-          };
-          const assignedDoctorId = deptToDoctorMap[selectedDept] || "1";
-
-          // 1. Create the new appointment
-          await fetch("http://127.0.0.1:8000/api/appointments/book", {
+          // 1. Create the new appointment using the NEW Triage endpoint
+          await fetch("http://127.0.0.1:8000/api/appointments/book-with-triage", {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              patient_id: currentUser.uid,
-              doctor_id: assignedDoctorId,
-              appointment_time: combinedDateTime,
-              status: "scheduled",
-              priority_score: 1, 
-              no_show_risk: mlData.no_show_risk_percentage || 0
-            })
+            body: formData 
+            // DO NOT set Content-Type header. Browser handles boundaries for FormData.
           });
 
-          // --- FIX: 2. Handle the old appointment if we were rescheduling ---
+          // 2. Handle the old appointment if we were rescheduling
           if (reschedulingId !== null) {
-            // Optimistically hide the old card from the UI
             setLocallyResolvedIds((prev) => [...prev, reschedulingId]);
             
-            // Tell the backend the old appointment has been resolved/rescheduled
             try {
               await fetch(`http://127.0.0.1:8000/api/appointments/${reschedulingId}/status`, {
                 method: "PUT",
@@ -226,13 +220,14 @@ const PatientDashboard = () => {
             } catch (err) {
               console.error("Failed to mark old appointment as rescheduled", err);
             }
-            // Clear the tracking state
             setReschedulingId(null);
           }
 
           setBookingState("confirmed");
         } catch (err) {
           console.error("Failed to save booking");
+          toast.error("Failed to book appointment.");
+          resetBooking();
         }
       }, 2000);
     } catch (error) {
@@ -245,7 +240,9 @@ const PatientDashboard = () => {
     setSelectedDept("");
     setSelectedDate("");
     setSelectedTime("");
-    setReschedulingId(null); // Clear reschedule state if cancelled mid-way
+    setCurrentSymptom(""); // Clear triage state
+    setMedicalRecord(null); // Clear file
+    setReschedulingId(null); 
     navigate("/patient");
   };
 
@@ -276,7 +273,7 @@ const PatientDashboard = () => {
               onClick={() => {
                 if (activeTab === "appointment" && tab.key !== "appointment") {
                   setBookingState("idle"); 
-                  setReschedulingId(null); // Clear out if they navigate away
+                  setReschedulingId(null); 
                 }
                 navigate(tab.path);
               }}
@@ -457,7 +454,44 @@ const PatientDashboard = () => {
                           ))}
                         </div>
                       </div>
-                      <Button type="submit" variant="hero" size="lg" className="w-full" disabled={!selectedDept || !selectedDate || !selectedTime}>
+
+                      {/* --- NEW: Phase 2 Triage Inputs --- */}
+                      <div className="space-y-4 pt-4 border-t border-border mt-4">
+                        <div className="space-y-2">
+                          <Label>Primary Reason for Visit <span className="text-destructive">*</span></Label>
+                          <select 
+                            value={currentSymptom} 
+                            onChange={(e) => setCurrentSymptom(e.target.value)} 
+                            className="w-full h-10 rounded-md border border-input bg-background px-3 text-sm text-foreground focus:ring-2 focus:ring-primary outline-none transition-all" 
+                            required
+                          >
+                            <option value="">Select primary symptom...</option>
+                            <option value="Routine Checkup">Routine Checkup / Follow-up</option>
+                            <option value="Mild Pain">Mild Pain / Discomfort</option>
+                            <option value="Fever/Cold">Fever / Cold Symptoms</option>
+                            <option value="Breathing Difficulty">Breathing Difficulty</option>
+                            <option value="Chest Pain">Severe Chest Pain / Cardiac</option>
+                          </select>
+                        </div>
+
+                        <div className="space-y-2">
+                          <Label>Previous Medical Records (PDF/Image)</Label>
+                          <Input 
+                            type="file" 
+                            accept=".pdf, image/*" 
+                            onChange={(e) => {
+                              if (e.target.files && e.target.files[0]) {
+                                setMedicalRecord(e.target.files[0]);
+                              }
+                            }} 
+                            className="cursor-pointer file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-primary/10 file:text-primary hover:file:bg-primary/20"
+                          />
+                          <p className="text-[11px] text-muted-foreground">Optional: Upload past records. Our AI will scan them to prioritize your care safely.</p>
+                        </div>
+                      </div>
+                      {/* --------------------------------- */}
+
+                      <Button type="submit" variant="hero" size="lg" className="w-full" disabled={!selectedDept || !selectedDate || !selectedTime || !currentSymptom}>
                         Book Appointment <ChevronRight className="ml-1 h-4 w-4" />
                       </Button>
                     </CardContent>
@@ -500,7 +534,6 @@ const PatientDashboard = () => {
                         <Button 
                           variant="outline" 
                           onClick={() => {
-                            // --- FIX: Store the ID we are fixing, then navigate ---
                             setReschedulingId(recordId);
                             navigate("/patient/appointment");
                           }}

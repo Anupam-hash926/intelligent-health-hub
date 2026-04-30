@@ -1,17 +1,34 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, File, Form, UploadFile
 from pydantic import BaseModel
 from typing import Optional
 import psycopg2
 import psycopg2.extras
 import os
 import heapq  
+import joblib  # ML Brain
+import numpy as np  # ML Math
 from dotenv import load_dotenv
-from datetime import datetime, timezone
+from datetime import datetime
+
+# Import Phase 2 Triage Logic
+from triage_engine import extract_text, calculate_dynamic_priority
 
 load_dotenv()
 DB_URL = os.getenv("DATABASE_URL")
 
 router = APIRouter(prefix="/api/appointments", tags=["Appointment Scheduling"])
+
+# ==========================================
+# 1. INTEGRATED AI BRAIN (PHASE 3)
+# ==========================================
+try:
+    model = joblib.load('noshow_model.pkl')
+    scaler = joblib.load('scaler.pkl')
+    print("✅ ML Intelligence integrated into Appointment Routes!")
+except Exception as e:
+    print(f"⚠️ ML Integration Warning: Models not found. Using default 0.0 risk. Error: {e}")
+    model = None
+    scaler = None
 
 def get_db_connection():
     return psycopg2.connect(DB_URL, cursor_factory=psycopg2.extras.RealDictCursor)
@@ -41,7 +58,7 @@ def call_next_patient():
     return {"message": "Next patient called!", "patient_name": patient_name, "priority_score": -neg_priority}
 
 # ==========================================
-# ACTUAL DATABASE BOOKING ROUTE 
+# ACTUAL DATABASE BOOKING ROUTE (Standard)
 # ==========================================
 class AppointmentCreate(BaseModel):
     patient_id: str          
@@ -76,7 +93,87 @@ def book_appointment(data: AppointmentCreate):
         if conn: conn.close()
 
 # ==========================================
-# UPDATE APPOINTMENT STATUS (Fixes the Reschedule Bug)
+# PHASE 2 & 3: INTELLIGENT TRIAGE BOOKING ROUTE
+# ==========================================
+@router.post("/book-with-triage")
+async def book_appointment_triage(
+    patient_id: str = Form(...),
+    doctor_id: str = Form(...),
+    appointment_time: str = Form(...),
+    current_symptom: str = Form(...),
+    file: Optional[UploadFile] = File(None) # NOTE: We completely removed no_show_risk from React!
+):
+    conn = None
+    cursor = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        # --- STEP 1: OCR Processing (Phase 2) ---
+        extracted_text = ""
+        if file:
+            file_bytes = await file.read()
+            extracted_text = extract_text(file_bytes, file.filename)
+            
+        # --- STEP 2: Priority Calculation (Phase 2) ---
+        final_priority = calculate_dynamic_priority(current_symptom, extracted_text)
+        
+        # --- STEP 3: DYNAMIC NO-SHOW PREDICTION (PHASE 3) ---
+        no_show_risk_percentage = 0.0
+        
+        if model and scaler:
+            try:
+                # A. Calculate Lead Time Days
+                # Appointment time usually comes in as "YYYY-MM-DD HH:MM"
+                apt_date = datetime.strptime(appointment_time[:16], "%Y-%m-%d %H:%M")
+                lead_time_days = (apt_date - datetime.now()).days
+                lead_time_days = max(0, lead_time_days)
+
+                # B. Fetch Patient Profile (Age, Distance, History)
+                metrics_query = """
+                    SELECT age, distance_miles,
+                    (SELECT COUNT(*) FROM appointments WHERE patient_id = %s AND status IN ('No-Show', 'no_show', 'No Show')) as history
+                    FROM patient_profiles WHERE uid = %s;
+                """
+                cursor.execute(metrics_query, (patient_id, patient_id))
+                m = cursor.fetchone()
+
+                # C. Run AI Prediction if they have a complete profile
+                if m and m['age'] is not None and m['distance_miles'] is not None:
+                    features = np.array([[m['age'], m['distance_miles'], lead_time_days, m['history']]])
+                    features_scaled = scaler.transform(features)
+                    # Probability[0] = No-Show, Probability[1] = Show
+                    no_show_risk_percentage = float(round(model.predict_proba(features_scaled)[0][0] * 100, 2))
+            except Exception as ml_err:
+                print(f"Prediction skipped/error: {ml_err}")
+
+        # --- STEP 4: Insert Final Appointment ---
+        query = """
+            INSERT INTO appointments (patient_id, doctor_id, appointment_time, status, priority_score, no_show_risk)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            RETURNING appointment_id;
+        """
+        cursor.execute(query, (patient_id, doctor_id, appointment_time, "scheduled", final_priority, no_show_risk_percentage))
+        result = cursor.fetchone()
+        conn.commit()
+        
+        return {
+            "status": "success", 
+            "appointment_id": result['appointment_id'] if result else None,
+            "assigned_priority": final_priority,
+            "message": f"Appointment booked successfully."
+        }
+        
+    except Exception as e:
+        print(f"🔥 Error in triage booking: {e}")
+        if conn: conn.rollback()
+        raise HTTPException(status_code=500, detail="Failed to process triage booking.")
+    finally:
+        if cursor: cursor.close()
+        if conn: conn.close()
+
+# ==========================================
+# UPDATE APPOINTMENT STATUS (Admin Confirm/Reschedule)
 # ==========================================
 class UpdateStatusRequest(BaseModel):
     status: str
@@ -93,18 +190,13 @@ def update_appointment_status(appointment_id: int, request: UpdateStatusRequest)
         cursor.execute(query, (request.status, appointment_id))
         conn.commit()
         
-        return {"status": "success", "message": "Appointment status updated successfully"}
-
+        return {"status": "success", "message": f"Status updated to {request.status}"}
     except Exception as e:
-        print(f"🔥 STATUS UPDATE ERROR: {e}")
-        if conn:
-            conn.rollback()
-        raise HTTPException(status_code=500, detail="Failed to update appointment status")
+        if conn: conn.rollback()
+        raise HTTPException(status_code=500, detail="Failed to update status")
     finally:
-        if cursor:
-            cursor.close()
-        if conn:
-            conn.close()
+        if cursor: cursor.close()
+        if conn: conn.close()
 
 # ==========================================
 # GET APPOINTMENTS FOR PATIENT HISTORY TAB
@@ -117,7 +209,6 @@ def get_patient_appointments(patient_id: str):
         conn = get_db_connection()
         cursor = conn.cursor()
         
-        # Updated to dynamically map IDs to names and departments!
         query = """
             SELECT 
                 appointment_id as id, 
@@ -159,7 +250,7 @@ def get_patient_appointments(patient_id: str):
         if conn: conn.close()
 
 # ==========================================
-# FETCH SPECIFIC DOCTOR'S APPOINTMENTS (PHASE 1)
+# FETCH SPECIFIC DOCTOR'S APPOINTMENTS
 # ==========================================
 @router.get("/doctor/{uid}/appointments")
 def get_doctor_appointments(uid: str):
@@ -169,7 +260,6 @@ def get_doctor_appointments(uid: str):
         conn = get_db_connection()
         cursor = conn.cursor()
         
-        # Bridge the Firebase UID -> users table email -> doctors table doctor_id -> appointments
         query = """
             SELECT 
                 a.appointment_id, 
@@ -188,7 +278,6 @@ def get_doctor_appointments(uid: str):
         cursor.execute(query, (uid,))
         appointments = cursor.fetchall()
 
-        # Format datetime objects so React can read them
         for apt in appointments:
             if hasattr(apt['appointment_time'], 'strftime'):
                 apt['appointment_time'] = apt['appointment_time'].strftime("%b %d, %Y - %I:%M %p")
@@ -203,7 +292,7 @@ def get_doctor_appointments(uid: str):
         if conn: conn.close()
 
 # ==========================================
-# GET DOCTOR PROFILE (For Header & Settings)
+# GET DOCTOR PROFILE
 # ==========================================
 @router.get("/doctor/{uid}/profile")
 def get_doctor_profile(uid: str):
@@ -245,7 +334,6 @@ def update_doctor_profile(uid: str, data: DoctorProfileUpdate):
         conn = get_db_connection()
         cursor = conn.cursor()
         
-        # 1. Update the doctor_profiles table
         query = """
             UPDATE doctor_profiles 
             SET full_name = %s, phone = %s, department = %s
@@ -253,7 +341,6 @@ def update_doctor_profile(uid: str, data: DoctorProfileUpdate):
         """
         cursor.execute(query, (data.full_name, data.phone, data.department, uid))
         
-        # 2. Sync the name/phone back to the main users table
         cursor.execute("UPDATE users SET full_name = %s, phone = %s WHERE uid = %s;", 
                       (data.full_name, data.phone, uid))
         
