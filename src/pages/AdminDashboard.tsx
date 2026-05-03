@@ -4,7 +4,8 @@ import { motion, AnimatePresence } from "framer-motion";
 import {
   LayoutDashboard, BedDouble, Users, Stethoscope, Brain,
   Loader2, Check, Plus, Edit, Trash2, X, Search, AlertCircle,
-  ShieldAlert, AlertTriangle, Clock, Database, Filter, Phone, CalendarDays
+  ShieldAlert, AlertTriangle, Clock, Database, Filter, Phone, CalendarDays,
+  Activity, RefreshCw
 } from "lucide-react";
 import DashboardLayout from "@/components/DashboardLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -71,6 +72,10 @@ const AdminDashboard = () => {
   const [lookupResult, setLookupResult] = useState<any>(null);
   const [isLookingUp, setIsLookingUp] = useState(false);
 
+  // --- PHASE 4: LIVE PRIORITY QUEUE STATES ---
+  const [liveQueue, setLiveQueue] = useState<any[]>([]);
+  const [isQueueLoading, setIsQueueLoading] = useState(false);
+
   // Fetch ML Appointments
   const fetchAppointments = async () => {
     try {
@@ -82,6 +87,24 @@ const AdminDashboard = () => {
       }
     } catch (err) {
       console.error("Failed to fetch appointments", err);
+    }
+  };
+
+  // --- PHASE 4: Fetch Live Waiting Room ---
+  const fetchLiveQueue = async () => {
+    setIsQueueLoading(true);
+    try {
+      const API_BASE = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
+      const res = await fetch(`${API_BASE}/api/appointments/live-queue`);
+      const data = await res.json();
+      if (data.status === "success") {
+        setLiveQueue(data.data);
+      }
+    } catch (err) {
+      console.error("Failed to fetch live queue", err);
+      toast.error("Failed to load Live Waiting Room.");
+    } finally {
+      setIsQueueLoading(false);
     }
   };
 
@@ -113,6 +136,26 @@ const AdminDashboard = () => {
       toast.error("Failed to search hospital records.");
     } finally {
       setIsSearching(false);
+    }
+  };
+
+  // --- PHASE 4: Mark Patient as Arrived (Receptionist Check-in) ---
+  const handleMarkArrived = async (appointmentId: number) => {
+    try {
+      const API_BASE = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
+      const res = await fetch(`${API_BASE}/api/appointments/${appointmentId}/arrive`, {
+        method: "PUT"
+      });
+      if (res.ok) {
+        toast.success("Patient successfully marked as arrived.");
+        // Refresh both tables to reflect the new status
+        handleSearch();
+        fetchLiveQueue();
+      } else {
+        toast.error("Failed to mark patient as arrived.");
+      }
+    } catch (error) {
+      toast.error("Network error while checking in patient.");
     }
   };
 
@@ -180,41 +223,33 @@ const AdminDashboard = () => {
     fetchLiveBeds();
     fetchAppointments(); // Fetch AI appointments on load
     handleSearch(); // Fetch all records on initial load
+    fetchLiveQueue(); // Fetch Live Waiting Room
   }, []);
 
   // --- FIXED: Reliable Database-First Triage Action ---
   const handleTriageAction = async (appointmentId: number, actionType: "confirm" | "double_book" | "dismiss") => {
-    setProcessingTriageId(appointmentId); // Starts the loading spinner
+    setProcessingTriageId(appointmentId); 
     
     try {
       const API_BASE = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
-      
-      // 1. Wait for the database to process and return a success response
       const res = await fetch(`${API_BASE}/api/admin/appointments/${appointmentId}/action`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: actionType }),
       });
 
-      if (!res.ok) {
-        throw new Error("Database failed to process the request.");
-      }
+      if (!res.ok) throw new Error("Database failed to process the request.");
 
-      // 2. Only AFTER database success do we remove the card from the screen
       setAppointments((prev) => prev.filter((apt) => apt.appointment_id !== appointmentId));
-      
-      // 3. Trigger the success toast
       const actionMessage = actionType === "double_book" ? "Double-booked" : actionType === "confirm" ? "Confirmed" : "Dismissed";
       toast.success(`Appointment ${actionMessage} successfully.`);
       
-      // Update global records silently in the background
-      handleSearch();
-
+      handleSearch(); // Update records silently
     } catch (err) {
       console.error("Action failed", err);
       toast.error("Failed to update database. Please check your connection.");
     } finally {
-      setProcessingTriageId(null); // Stop the loading spinner
+      setProcessingTriageId(null); 
     }
   };
 
@@ -256,9 +291,7 @@ const AdminDashboard = () => {
       const response = await fetch(`${API_BASE}/api/beds/release/${bedId}`, {
         method: 'POST',
       });
-      if (response.ok) {
-        fetchLiveBeds(); 
-      }
+      if (response.ok) fetchLiveBeds(); 
     } catch (error) {
       console.error("Release error:", error);
     }
@@ -268,7 +301,6 @@ const AdminDashboard = () => {
     e.preventDefault();
     if (!formData.name || !formData.email || !formData.phone || !formData.department) return;
     
-    // Strict 10-digit validation
     if (formData.phone.length !== 10) {
       toast.error("Phone number must be exactly 10 digits.");
       return;
@@ -285,10 +317,7 @@ const AdminDashboard = () => {
     setShowAddForm(false);
   };
 
-  const handleDelete = (id: number) => {
-    setDoctors(doctors.filter(d => d.id !== id));
-  };
-
+  const handleDelete = (id: number) => setDoctors(doctors.filter(d => d.id !== id));
   const handleEdit = (id: number) => {
     const item = doctors.find(d => d.id === id);
     if (item) {
@@ -300,6 +329,35 @@ const AdminDashboard = () => {
 
   const filteredDoctors = doctors.filter(d => (selectedDept === "All" || d.dept === selectedDept) && d.name.toLowerCase().includes(searchDir.toLowerCase()));
   const matchingPatients = patients.filter(p => p.phone.includes(lookupPhone));
+
+  // --- NEW: DYNAMIC SORTING FOR GLOBAL RECORDS ---
+  const sortedRecords = [...records].sort((a, b) => {
+    // 1. Define the priority ranks (Lower number = higher up on the screen)
+    const statusRank: Record<string, number> = {
+      entered_hospital: 1, // Top Priority (Physically here)
+      confirmed: 2,        // High Priority (Approved & coming)
+      scheduled: 3,        // Middle Priority (Pending review)
+      reschedule_requested: 4, 
+      completed: 5,        // Bottom Priority (Finished)
+    };
+
+    // Safely grab the rank, defaulting to 99 if it's an unknown status
+    const rankA = statusRank[a.status?.toLowerCase()] || 99;
+    const rankB = statusRank[b.status?.toLowerCase()] || 99;
+
+    // 2. Primary Sort: By Status Rank
+    if (rankA !== rankB) {
+      return rankA - rankB;
+    }
+
+    // 3. Secondary Sort (Tie-Breaker): By Appointment Date/Time
+    const dateA = new Date(a.appointment_time).getTime();
+    const dateB = new Date(b.appointment_time).getTime();
+
+    // If dates are invalid, treat them as equal tiebreakers, otherwise ascending
+    if (isNaN(dateA) || isNaN(dateB)) return 0;
+    return dateA - dateB; 
+  });
 
   return (
     <DashboardLayout navItems={navItems} role="Admin">
@@ -471,8 +529,62 @@ const AdminDashboard = () => {
 
         {/* GLOBAL RECORDS TAB */}
         {activeTab === "records" && (
-          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-4">
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6">
             
+            {/* --- PHASE 4: LIVE WAITING ROOM --- */}
+            <Card className="border-border shadow-sm border-l-4 border-l-primary bg-primary/5">
+              <CardHeader className="flex flex-row items-center justify-between pb-2">
+                <div className="space-y-1">
+                  <CardTitle className="text-lg flex items-center gap-2 text-primary">
+                    <Activity className="h-5 w-5" />
+                    Live Priority Queue (Waiting Room)
+                  </CardTitle>
+                  <p className="text-xs text-muted-foreground">Dynamically calculated Effective Priority (Base + Wait Time)</p>
+                </div>
+                <Button variant="default" size="sm" onClick={fetchLiveQueue} disabled={isQueueLoading}>
+                  <RefreshCw className={`h-4 w-4 mr-2 ${isQueueLoading ? "animate-spin" : ""}`} />
+                  Refresh Queue
+                </Button>
+              </CardHeader>
+              <CardContent>
+                <div className="overflow-x-auto bg-card rounded-md border border-border">
+                  <table className="w-full text-sm text-left">
+                    <thead className="bg-muted text-muted-foreground uppercase text-xs">
+                      <tr>
+                        <th className="px-4 py-3 font-semibold">Patient Name</th>
+                        <th className="px-4 py-3 font-semibold text-center">Base Score</th>
+                        <th className="px-4 py-3 font-semibold text-center">Wait Time</th>
+                        <th className="px-4 py-3 font-semibold text-center text-primary">Effective Priority</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-border">
+                      {liveQueue.length === 0 ? (
+                        <tr>
+                          <td colSpan={4} className="px-4 py-6 text-center text-muted-foreground">
+                            Waiting room is currently empty.
+                          </td>
+                        </tr>
+                      ) : (
+                        liveQueue.map((patient) => (
+                          <tr key={patient.appointment_id} className="hover:bg-muted/30 transition-colors">
+                            <td className="px-4 py-3 font-medium text-foreground">{patient.patient_name}</td>
+                            <td className="px-4 py-3 text-center text-muted-foreground">{patient.base_priority}</td>
+                            <td className="px-4 py-3 text-center text-warning font-medium">
+                              {patient.wait_time_minutes} mins
+                            </td>
+                            <td className="px-4 py-3 text-center text-primary font-bold text-lg">
+                              {patient.effective_priority}
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* --- EXISTING RECORDS SEARCH --- */}
             <Card className="border-border shadow-sm">
               <CardContent className="p-4 sm:p-6">
                 <form onSubmit={handleSearch} className="flex flex-col sm:flex-row gap-4 items-end">
@@ -524,29 +636,58 @@ const AdminDashboard = () => {
                       <th className="px-6 py-4 font-semibold">Date & Time</th>
                       <th className="px-6 py-4 font-semibold">Assigned Doctor</th>
                       <th className="px-6 py-4 font-semibold">Status</th>
+                      <th className="px-6 py-4 font-semibold text-center">Actions</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border">
-                    {records.length === 0 ? (
+                    {/* --- UPDATE: Map over sortedRecords instead of records --- */}
+                    {sortedRecords.length === 0 ? (
                       <tr>
-                        <td colSpan={5} className="px-6 py-8 text-center text-muted-foreground">
+                        <td colSpan={6} className="px-6 py-8 text-center text-muted-foreground">
                           No appointment records found matching those filters.
                         </td>
                       </tr>
                     ) : (
-                      records.map((record) => (
-                        <tr key={record.appointment_id} className="hover:bg-muted/20 transition-colors">
-                          <td className="px-6 py-4 font-medium text-foreground">{record.patient_name}</td>
-                          <td className="px-6 py-4 text-muted-foreground">{record.phone}</td>
-                          <td className="px-6 py-4 text-muted-foreground">{record.appointment_time}</td>
-                          <td className="px-6 py-4 text-muted-foreground">{record.doctor_name}</td>
-                          <td className="px-6 py-4">
-                            <Badge variant={record.status === 'completed' ? 'default' : record.status === 'reschedule_requested' ? 'destructive' : 'secondary'}>
-                              {record.status}
-                            </Badge>
-                          </td>
-                        </tr>
-                      ))
+                      sortedRecords.map((record) => {
+                        // Protect against missing data or case sensitivity issues
+                        const status = record.status?.toLowerCase() || '';
+
+                        return (
+                          <tr key={record.appointment_id || record.id} className="hover:bg-muted/20 transition-colors">
+                            <td className="px-6 py-4 font-medium text-foreground">{record.patient_name}</td>
+                            <td className="px-6 py-4 text-muted-foreground">{record.phone}</td>
+                            <td className="px-6 py-4 text-muted-foreground">{record.appointment_time}</td>
+                            <td className="px-6 py-4 text-muted-foreground">{record.doctor_name}</td>
+                            <td className="px-6 py-4">
+                              <Badge variant={status === 'completed' ? 'default' : status === 'reschedule_requested' ? 'destructive' : 'secondary'}>
+                                {record.status}
+                              </Badge>
+                            </td>
+                            <td className="px-6 py-4 text-center">
+                              {/* --- PHASE 4: Check-in button (Case Insensitive + Safe) --- */}
+                              {status === 'confirmed' ? (
+                                <Button 
+                                  size="sm" 
+                                  className="bg-success hover:bg-success/90 text-white w-full"
+                                  onClick={() => handleMarkArrived(record.appointment_id || record.id)}
+                                >
+                                  Mark Arrived
+                                </Button>
+                              ) : status === 'entered_hospital' ? (
+                                <Badge className="bg-purple-100 text-purple-800 border-purple-200 w-full py-1.5 justify-center">
+                                  In Waiting Room
+                                </Badge>
+                              ) : status === 'scheduled' ? (
+                                <span className="text-xs text-muted-foreground block text-center mt-2">
+                                  Pending Review
+                                </span>
+                              ) : (
+                                <span className="text-muted-foreground">-</span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })
                     )}
                   </tbody>
                 </table>
@@ -582,11 +723,11 @@ const AdminDashboard = () => {
                           setLookupPhone(val);
                           
                           if (val.length < 10) {
-                            setLookupResult(null); // Clear previous result while typing
+                            setLookupResult(null); 
                           }
                           
                           if (val.length === 10) {
-                            performPhoneLookup(val); // Auto-trigger search at exactly 10 digits
+                            performPhoneLookup(val); 
                           }
                         }
                       }}

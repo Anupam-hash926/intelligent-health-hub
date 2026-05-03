@@ -4,7 +4,6 @@ from typing import Optional
 import psycopg2
 import psycopg2.extras
 import os
-import heapq  
 import joblib  # ML Brain
 import numpy as np  # ML Math
 from dotenv import load_dotenv
@@ -12,6 +11,9 @@ from datetime import datetime
 
 # Import Phase 2 Triage Logic
 from triage_engine import extract_text, calculate_dynamic_priority
+
+# Import Phase 5 Simulator
+from monte_carlo import MonteCarloSimulator
 
 load_dotenv()
 DB_URL = os.getenv("DATABASE_URL")
@@ -33,29 +35,106 @@ except Exception as e:
 def get_db_connection():
     return psycopg2.connect(DB_URL, cursor_factory=psycopg2.extras.RealDictCursor)
 
+
 # ==========================================
-# DSA CONCEPT: PRIORITY QUEUE (Max-Heap)
+# PHASE 4: LIVE PRIORITY QUEUE & RECEPTIONIST
 # ==========================================
-waiting_room_queue = []
-entry_counter = 0 
 
-class QueueRequest(BaseModel):
-    patient_name: str
-    priority_score: int 
+@router.put("/{appointment_id}/arrive")
+def mark_patient_arrived(appointment_id: int):
+    """Marks a patient as physically present using exact server time."""
+    conn = None
+    cursor = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # 1. Grab the exact local time from Python to avoid DB timezone offsets
+        exact_now = datetime.now()
+        
+        # 2. Pass it directly to the database
+        query = """
+            UPDATE appointments 
+            SET status = 'entered_hospital', entry_time = %s
+            WHERE appointment_id = %s
+        """
+        cursor.execute(query, (exact_now, appointment_id))
+        conn.commit()
+        
+        return {"status": "success", "message": "Patient marked as arrived."}
+    except Exception as e:
+        if conn: conn.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if cursor: cursor.close()
+        if conn: conn.close()
 
-@router.post("/waiting-room/add")
-def add_patient_to_queue(request: QueueRequest):
-    global entry_counter
-    heapq.heappush(waiting_room_queue, (-request.priority_score, entry_counter, request.patient_name))
-    entry_counter += 1
-    return {"message": f"{request.patient_name} added.", "current_queue_size": len(waiting_room_queue)}
 
-@router.get("/waiting-room/call-next")
-def call_next_patient():
-    if not waiting_room_queue:
-        return {"message": "The waiting room is empty!"}
-    neg_priority, count, patient_name = heapq.heappop(waiting_room_queue)
-    return {"message": "Next patient called!", "patient_name": patient_name, "priority_score": -neg_priority}
+@router.get("/live-queue")
+def get_live_priority_queue():
+    """Calculates effective priority dynamically based on wait time."""
+    conn = None
+    cursor = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Fetch only patients who are physically in the waiting room
+        query = """
+            SELECT a.appointment_id, a.patient_id, COALESCE(p.full_name, 'Unknown') as patient_name, 
+                   a.doctor_id, a.priority_score as base_priority, a.entry_time
+            FROM appointments a
+            LEFT JOIN patient_profiles p ON a.patient_id = p.uid
+            WHERE a.status = 'entered_hospital'
+        """
+        cursor.execute(query)
+        waiting_patients = cursor.fetchall()
+
+        now = datetime.now()
+        queue_response = []
+
+        for patient in waiting_patients:
+            entry_time = patient['entry_time']
+            wait_time_minutes = 0
+            effective_priority = patient['base_priority'] or 1
+
+            if entry_time:
+                # Strip hidden timezone data to prevent crashes/offsets
+                safe_entry_time = entry_time.replace(tzinfo=None)
+                
+                # Calculate true minutes passed
+                wait_time_delta = now - safe_entry_time
+                wait_time_minutes = int(wait_time_delta.total_seconds() / 60)
+                
+                # Prevent negative wait times if clocks drift by a millisecond
+                wait_time_minutes = max(0, wait_time_minutes)
+                
+                # Add 0.1 priority points for every minute waiting
+                effective_priority = effective_priority + (wait_time_minutes * 0.1)
+
+            # Package it for the frontend
+            patient_data = dict(patient)
+            patient_data['wait_time_minutes'] = wait_time_minutes
+            patient_data['effective_priority'] = round(effective_priority, 2)
+            
+            # Serialize datetime for JSON
+            if patient_data['entry_time']:
+                patient_data['entry_time'] = safe_entry_time.isoformat()
+            
+            queue_response.append(patient_data)
+
+        # THE SORT: Sort primarily by Effective Priority (Highest first), then by longest wait time
+        queue_response.sort(key=lambda x: (x['effective_priority'], x['wait_time_minutes']), reverse=True)
+
+        return {"status": "success", "data": queue_response}
+
+    except Exception as e:
+        print(f"🔥 Error fetching live queue: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if cursor: cursor.close()
+        if conn: conn.close()
+
 
 # ==========================================
 # ACTUAL DATABASE BOOKING ROUTE (Standard)
@@ -101,7 +180,7 @@ async def book_appointment_triage(
     doctor_id: str = Form(...),
     appointment_time: str = Form(...),
     current_symptom: str = Form(...),
-    file: Optional[UploadFile] = File(None) # NOTE: We completely removed no_show_risk from React!
+    file: Optional[UploadFile] = File(None) 
 ):
     conn = None
     cursor = None
@@ -124,7 +203,6 @@ async def book_appointment_triage(
         if model and scaler:
             try:
                 # A. Calculate Lead Time Days
-                # Appointment time usually comes in as "YYYY-MM-DD HH:MM"
                 apt_date = datetime.strptime(appointment_time[:16], "%Y-%m-%d %H:%M")
                 lead_time_days = (apt_date - datetime.now()).days
                 lead_time_days = max(0, lead_time_days)
@@ -142,7 +220,6 @@ async def book_appointment_triage(
                 if m and m['age'] is not None and m['distance_miles'] is not None:
                     features = np.array([[m['age'], m['distance_miles'], lead_time_days, m['history']]])
                     features_scaled = scaler.transform(features)
-                    # Probability[0] = No-Show, Probability[1] = Show
                     no_show_risk_percentage = float(round(model.predict_proba(features_scaled)[0][0] * 100, 2))
             except Exception as ml_err:
                 print(f"Prediction skipped/error: {ml_err}")
@@ -168,6 +245,30 @@ async def book_appointment_triage(
         print(f"🔥 Error in triage booking: {e}")
         if conn: conn.rollback()
         raise HTTPException(status_code=500, detail="Failed to process triage booking.")
+    finally:
+        if cursor: cursor.close()
+        if conn: conn.close()
+
+# ==========================================
+# CANCEL APPOINTMENT ROUTE 
+# ==========================================
+@router.put("/{appointment_id}/cancel")
+def cancel_appointment(appointment_id: int):
+    conn = None
+    cursor = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        query = "UPDATE appointments SET status = 'cancelled' WHERE appointment_id = %s"
+        cursor.execute(query, (appointment_id,))
+        conn.commit()
+        
+        return {"status": "success", "message": "Appointment cancelled successfully"}
+    except Exception as e:
+        print(f"🔥 Error cancelling appointment: {e}")
+        if conn: conn.rollback()
+        raise HTTPException(status_code=500, detail="Failed to cancel appointment")
     finally:
         if cursor: cursor.close()
         if conn: conn.close()
@@ -350,6 +451,67 @@ def update_doctor_profile(uid: str, data: DoctorProfileUpdate):
         print(f"🔥 Error updating profile: {e}")
         if conn: conn.rollback()
         raise HTTPException(status_code=500, detail="Failed to update profile")
+    finally:
+        if cursor: cursor.close()
+        if conn: conn.close()
+
+# ==========================================
+# PHASE 5: MONTE CARLO SIMULATION ENDPOINT
+# ==========================================
+@router.get("/simulate/{doctor_id}/{date_string}")
+def run_monte_carlo_simulation(doctor_id: str, date_string: str):
+    """
+    Runs the simulation for a specific doctor on a specific date (e.g., '2026-05-04')
+    """
+    conn = None
+    cursor = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # 1. Fetch tomorrow's scheduled/confirmed appointments for this doctor
+        query = """
+            SELECT appointment_id, appointment_time, priority_score, no_show_risk
+            FROM appointments
+            WHERE doctor_id = %s 
+            AND DATE(appointment_time) = %s
+            AND status IN ('scheduled', 'confirmed')
+        """
+        cursor.execute(query, (doctor_id, date_string))
+        appointments = cursor.fetchall()
+        
+        if not appointments:
+            return {"status": "success", "message": "No appointments found.", "data": None}
+
+        # 2. Format the data for the Simulator (Convert time to minutes-since-midnight)
+        schedule_data = []
+        for apt in appointments:
+            dt = apt['appointment_time']
+            # e.g., 09:30 AM = (9 * 60) + 30 = 570 minutes
+            scheduled_minute = (dt.hour * 60) + dt.minute 
+            
+            schedule_data.append({
+                'id': apt['appointment_id'],
+                'scheduled_minute': scheduled_minute,
+                'base_priority': apt['priority_score'] or 1,
+                'no_show_risk': float(apt['no_show_risk'] or 0.0)
+            })
+
+        # 3. Feed it to the Engine and run 1,000 times!
+        simulator = MonteCarloSimulator(schedule_data)
+        results = simulator.run_simulation(iterations=1000)
+
+        return {
+            "status": "success",
+            "doctor_id": doctor_id,
+            "date": date_string,
+            "total_appointments": len(schedule_data),
+            "simulation_results": results
+        }
+
+    except Exception as e:
+        print(f"🔥 Error running simulation: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
     finally:
         if cursor: cursor.close()
         if conn: conn.close()

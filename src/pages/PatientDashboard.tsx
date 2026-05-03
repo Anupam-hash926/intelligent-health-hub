@@ -4,13 +4,13 @@ import { motion, AnimatePresence } from "framer-motion";
 import {
   History, CalendarPlus, AlertTriangle, Search, Clock,
   MapPin, Bed, ChevronRight, Check, Loader2, FileText,
-  Pill, Stethoscope, TrendingUp, User, Save
+  Pill, Stethoscope, TrendingUp, User, Save, Calendar
 } from "lucide-react";
 import DashboardLayout from "@/components/DashboardLayout";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription, CardFooter } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner"; 
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -26,8 +26,8 @@ const navItems = [
 ];
 
 const medicalHistory = [
-  { id: 1, date: "2026-02-15", doctor: "Dr. Sarah Chen", department: "Cardiology", diagnosis: "Mild Hypertension", prescription: "Amlodipine 5mg", status: "Completed" },
-  { id: 2, date: "2026-01-20", doctor: "Dr. James Wilson", department: "General Medicine", diagnosis: "Seasonal Flu", prescription: "Oseltamivir 75mg", status: "Completed" },
+  { id: 1, date: "2026-02-15 09:00", doctor: "Dr. Sarah Chen", department: "Cardiology", diagnosis: "Mild Hypertension", status: "Completed" },
+  { id: 2, date: "2026-01-20 14:00", doctor: "Dr. James Wilson", department: "General Medicine", diagnosis: "Seasonal Flu", status: "Completed" },
 ];
 
 const departments = ["Cardiology", "General Medicine", "Orthopedics", "Dermatology", "Neurology", "Pediatrics"];
@@ -52,7 +52,6 @@ const PatientDashboard = () => {
   const [selectedTime, setSelectedTime] = useState("");
   const [bookingState, setBookingState] = useState<"idle" | "checking" | "confirmed" | "alternate">("idle");
 
-  // --- NEW STATES FOR PHASE 2 TRIAGE ---
   const [currentSymptom, setCurrentSymptom] = useState("");
   const [medicalRecord, setMedicalRecord] = useState<File | null>(null);
 
@@ -70,11 +69,9 @@ const PatientDashboard = () => {
   const [historyData, setHistoryData] = useState<any[]>([]);
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
 
-  // --- NEW STATES FOR RESCHEDULING LOGIC ---
   const [reschedulingId, setReschedulingId] = useState<number | null>(null);
   const [locallyResolvedIds, setLocallyResolvedIds] = useState<number[]>([]);
 
-  // Determine active tab based on URL
   useEffect(() => {
     const path = location.pathname;
     if (path.includes("/appointment")) setActiveTab("appointment");
@@ -83,7 +80,6 @@ const PatientDashboard = () => {
     else setActiveTab("history");
   }, [location.pathname]);
 
-  // Fetch Profile Data IMMEDIATELY on load
   useEffect(() => {
     if (!currentUser?.uid) return;
 
@@ -102,21 +98,22 @@ const PatientDashboard = () => {
       .finally(() => setIsProfileLoading(false));
   }, [currentUser?.uid]);
 
-  // Fetch History Data ONLY when on History tab
-  useEffect(() => {
+  const fetchHistory = () => {
     if (!currentUser?.uid) return;
+    setIsLoadingHistory(true);
+    fetch(`http://127.0.0.1:8000/api/appointments/patient/${currentUser.uid}`)
+      .then(res => res.json())
+      .then(data => setHistoryData(data.data && data.data.length > 0 ? data.data : medicalHistory))
+      .catch(() => setHistoryData(medicalHistory))
+      .finally(() => setIsLoadingHistory(false));
+  };
 
+  useEffect(() => {
     if (activeTab === "history") {
-      setIsLoadingHistory(true);
-      fetch(`http://127.0.0.1:8000/api/appointments/patient/${currentUser.uid}`)
-        .then(res => res.json())
-        .then(data => setHistoryData(data.data && data.data.length > 0 ? data.data : medicalHistory))
-        .catch(() => setHistoryData(medicalHistory))
-        .finally(() => setIsLoadingHistory(false));
+      fetchHistory();
     }
   }, [activeTab, currentUser?.uid]);
 
-  // Apply search query filter AND hide locally resolved items
   const filteredHistory = historyData.filter((h) => {
     const recordId = h.appointment_id || h.id;
     if (locallyResolvedIds.includes(recordId)) return false; 
@@ -187,7 +184,6 @@ const PatientDashboard = () => {
       };
       const assignedDoctorId = deptToDoctorMap[selectedDept] || "1";
 
-      // --- PHASE 2: Build the Multipart Form Data Payload ---
       const formData = new FormData();
       formData.append("patient_id", currentUser.uid);
       formData.append("doctor_id", assignedDoctorId);
@@ -200,14 +196,11 @@ const PatientDashboard = () => {
 
       setTimeout(async () => {
         try {
-          // 1. Create the new appointment using the NEW Triage endpoint
           await fetch("http://127.0.0.1:8000/api/appointments/book-with-triage", {
             method: "POST",
             body: formData 
-            // DO NOT set Content-Type header. Browser handles boundaries for FormData.
           });
 
-          // 2. Handle the old appointment if we were rescheduling
           if (reschedulingId !== null) {
             setLocallyResolvedIds((prev) => [...prev, reschedulingId]);
             
@@ -235,13 +228,37 @@ const PatientDashboard = () => {
     }
   };
 
+  // --- NEW: Cancel Appointment Handler ---
+  const handleCancelAppointment = async (appointmentId: number) => {
+    if (!window.confirm("Are you sure you want to cancel this appointment?")) return;
+
+    try {
+      const response = await fetch(`http://127.0.0.1:8000/api/appointments/${appointmentId}/cancel`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        }
+      });
+
+      if (response.ok) {
+        toast.success("Appointment cancelled successfully.");
+        fetchHistory(); // Refresh the data to remove/update the cancelled appointment
+      } else {
+        toast.error("Failed to cancel appointment.");
+      }
+    } catch (error) {
+      console.error("Error cancelling appointment:", error);
+      toast.error("An error occurred while cancelling.");
+    }
+  };
+
   const resetBooking = () => {
     setBookingState("idle");
     setSelectedDept("");
     setSelectedDate("");
     setSelectedTime("");
-    setCurrentSymptom(""); // Clear triage state
-    setMedicalRecord(null); // Clear file
+    setCurrentSymptom("");
+    setMedicalRecord(null);
     setReschedulingId(null); 
     navigate("/patient");
   };
@@ -426,7 +443,7 @@ const PatientDashboard = () => {
                       <AlertTriangle className="h-5 w-5" />
                       <div>
                         <p className="font-bold text-sm">Rescheduling Appointment</p>
-                        <p className="text-xs">Your previous appointment has been dismissed by the administration due to high risk. Please select a new slot.</p>
+                        <p className="text-xs">Your previous appointment has been dismissed by the administration due to a scheduling conflict. Please select a new slot.</p>
                       </div>
                     </div>
                   )}
@@ -455,7 +472,6 @@ const PatientDashboard = () => {
                         </div>
                       </div>
 
-                      {/* --- NEW: Phase 2 Triage Inputs --- */}
                       <div className="space-y-4 pt-4 border-t border-border mt-4">
                         <div className="space-y-2">
                           <Label>Primary Reason for Visit <span className="text-destructive">*</span></Label>
@@ -489,7 +505,6 @@ const PatientDashboard = () => {
                           <p className="text-[11px] text-muted-foreground">Optional: Upload past records. Our AI will scan them to prioritize your care safely.</p>
                         </div>
                       </div>
-                      {/* --------------------------------- */}
 
                       <Button type="submit" variant="hero" size="lg" className="w-full" disabled={!selectedDept || !selectedDate || !selectedTime || !currentSymptom}>
                         Book Appointment <ChevronRight className="ml-1 h-4 w-4" />
@@ -517,40 +532,114 @@ const PatientDashboard = () => {
         {activeTab === "history" && (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-4">
              {isLoadingHistory ? <Loader2 className="animate-spin mx-auto mt-10" /> : 
-              <div className="grid gap-3">
+              <div className="grid gap-4">
                 {filteredHistory.map((record) => {
                    const recordId = record.appointment_id || record.id;
                    
+                   // --- Safely parse the date/time string ---
+                   let displayDate = "Unknown Date";
+                   let displayTime = "Unknown Time";
+                   if (record.date) {
+                     const dateObj = new Date(record.date);
+                     if (!isNaN(dateObj.getTime())) {
+                       displayDate = dateObj.toLocaleDateString();
+                       displayTime = dateObj.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                     } else {
+                       // Fallback if Date parsing fails on raw string
+                       const splitDate = record.date.split(" ");
+                       if(splitDate.length >= 2) {
+                         displayDate = splitDate[0];
+                         displayTime = splitDate[1];
+                       }
+                     }
+                   }
+                   
                    return record.status === "reschedule_requested" ? (
-                    <Card key={recordId} className="border-destructive bg-destructive/5">
-                      <CardContent className="p-4 flex flex-col md:flex-row items-center justify-between gap-3">
+                    <Card key={recordId} className="border-destructive bg-destructive/5 shadow-sm">
+                      <CardHeader className="pb-2">
                         <div className="flex gap-3">
                           <AlertTriangle className="text-destructive h-5 w-5 mt-1" />
                           <div>
-                            <p className="font-bold text-destructive">Reschedule Needed</p>
-                            <p className="text-sm">High no-show risk detected for {record.department}.</p>
+                            <CardTitle className="font-bold text-destructive text-lg">Reschedule Needed</CardTitle>
+                            <CardDescription className="text-sm mt-1">High no-show risk detected for {record.department}.</CardDescription>
                           </div>
                         </div>
-                        <Button 
-                          variant="outline" 
-                          onClick={() => {
-                            setReschedulingId(recordId);
-                            navigate("/patient/appointment");
-                          }}
-                        >
-                          Reschedule
-                        </Button>
+                      </CardHeader>
+                      <CardContent>
+                        <div className="flex flex-col space-y-2 mt-2 text-gray-700">
+                          <div className="flex items-center">
+                            <Calendar className="w-4 h-4 mr-2 text-gray-500" />
+                            <span className="font-medium">Original Date:</span> 
+                            <span className="ml-2">{displayDate}</span>
+                          </div>
+                          <div className="flex items-center">
+                            <Clock className="w-4 h-4 mr-2 text-gray-500" />
+                            <span className="font-medium">Original Time:</span> 
+                            <span className="ml-2">{displayTime}</span>
+                          </div>
+                        </div>
                       </CardContent>
+                      <CardFooter className="flex justify-end gap-2 pt-2 border-t border-destructive/10">
+                         <Button 
+                           variant="outline" 
+                           onClick={() => {
+                             setReschedulingId(recordId);
+                             navigate("/patient/appointment");
+                           }}
+                         >
+                           Reschedule
+                         </Button>
+                         <Button 
+                           variant="destructive" 
+                           onClick={() => handleCancelAppointment(recordId)}
+                         >
+                           Cancel
+                         </Button>
+                      </CardFooter>
                     </Card>
                    ) : (
-                    <Card key={recordId} className="border-border">
-                      <CardContent className="p-4 flex justify-between items-center">
-                        <div>
-                          <p className="font-semibold">{record.diagnosis || "Consultation"}</p>
-                          <p className="text-sm text-muted-foreground">{record.doctor} · {record.department}</p>
+                    <Card key={recordId} className="border-gray-200 shadow-sm">
+                      <CardHeader className="pb-2">
+                        <div className="flex justify-between items-start">
+                          <CardTitle className="text-lg font-semibold text-blue-900">
+                            {record.doctor}
+                          </CardTitle>
+                          <Badge variant={record.status === 'scheduled' ? 'default' : 'secondary'}>
+                            {record.status?.toUpperCase() || "UNKNOWN"}
+                          </Badge>
                         </div>
-                        <Badge>{record.status}</Badge>
+                        <CardDescription>{record.department}</CardDescription>
+                      </CardHeader>
+                      <CardContent>
+                        <div className="flex flex-col space-y-2 mt-2 text-gray-700">
+                          <div className="flex items-center">
+                            <Calendar className="w-4 h-4 mr-2 text-gray-500" />
+                            <span className="font-medium">Date:</span> 
+                            <span className="ml-2">{displayDate}</span>
+                          </div>
+                          <div className="flex items-center">
+                            <Clock className="w-4 h-4 mr-2 text-gray-500" />
+                            <span className="font-medium">Time:</span> 
+                            <span className="ml-2">{displayTime}</span>
+                          </div>
+                          <div className="flex items-center">
+                            <FileText className="w-4 h-4 mr-2 text-gray-500" />
+                            <span className="font-medium">Reason/Diagnosis:</span> 
+                            <span className="ml-2">{record.diagnosis || "Consultation"}</span>
+                          </div>
+                        </div>
                       </CardContent>
+                      <CardFooter className="flex justify-end pt-2">
+                        {record.status === 'scheduled' && (
+                          <Button 
+                            variant="destructive" 
+                            size="sm"
+                            onClick={() => handleCancelAppointment(recordId)}
+                          >
+                            Cancel Appointment
+                          </Button>
+                        )}
+                      </CardFooter>
                     </Card>
                    )
                 })}

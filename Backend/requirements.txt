@@ -1,5 +1,5 @@
-fastapi==0.110.0
+fastapi
 uvicorn==0.27.1
-pydantic==2.6.3
-psycopg2-binary==2.9.9
+pydantic
+psycopg2-binary
 python-dotenv==1.0.1
