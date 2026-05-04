@@ -71,20 +71,30 @@ const DoctorDashboard = () => {
     }
   }, [currentUser]);
 
-  const handleComplete = async (appointmentId: number) => {
-    try {
-      // Make sure your backend has this route, or adjust the URL accordingly!
-      const res = await fetch(`${API_BASE}/api/appointments/${appointmentId}/complete`, {
-        method: "PUT",
-      });
-      if(res.ok) {
-        toast.success("Appointment marked as complete!");
-        fetchAppointments();
-      }
-    } catch (err) {
-      console.error("Failed to complete appointment", err);
+  const handleComplete = async (appointmentId) => {
+  try {
+    const API_BASE = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
+    const res = await fetch(`${API_BASE}/api/appointments/${appointmentId}/complete`, {
+      method: "PUT"
+    });
+    
+    if (res.ok) {
+      toast.success("Appointment marked as completed!");
+      
+      // THE FIX: Instantly remove the card from the screen by filtering the state!
+      // (Make sure 'setAppointments' matches whatever your state variable is called)
+      setAppointments((prevAppointments) => 
+        prevAppointments.filter((apt) => apt.appointment_id !== appointmentId)
+      );
+      
+    } else {
+      toast.error("Failed to complete appointment.");
     }
-  };
+  } catch (error) {
+    console.error("Error completing appointment:", error);
+    toast.error("Network error.");
+  }
+};
 
   // 3. Save Profile Info
   const handleSaveProfile = async (e: React.FormEvent) => {

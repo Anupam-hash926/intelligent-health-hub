@@ -32,9 +32,13 @@ const medicalHistory = [
 
 const departments = ["Cardiology", "General Medicine", "Orthopedics", "Dermatology", "Neurology", "Pediatrics"];
 const timeSlots = [
-  { time: "09:00 AM", demand: "low" }, { time: "10:00 AM", demand: "high" },
-  { time: "11:00 AM", demand: "low" }, { time: "02:00 PM", demand: "high" },
-  { time: "03:00 PM", demand: "low" }, { time: "04:00 PM", demand: "medium" },
+  "09:00 AM", "09:15 AM", "09:30 AM", "09:45 AM",
+  "10:00 AM", "10:15 AM", "10:30 AM", "10:45 AM",
+  "11:00 AM", "11:15 AM", "11:30 AM", "11:45 AM",
+  // Lunch Break
+  "02:00 PM", "02:15 PM", "02:30 PM", "02:45 PM",
+  "03:00 PM", "03:15 PM", "03:30 PM", "03:45 PM",
+  "04:00 PM", "04:15 PM", "04:30 PM", "04:45 PM"
 ];
 
 const bloodGroups = ["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"];
@@ -462,14 +466,27 @@ const PatientDashboard = () => {
                         <Input type="date" value={selectedDate} onChange={(e) => setSelectedDate(e.target.value)} min={new Date().toISOString().split("T")[0]} required />
                       </div>
                       <div className="space-y-2">
-                        <Label>Time Slot</Label>
-                        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                          {timeSlots.map((slot) => (
-                            <button key={slot.time} type="button" onClick={() => setSelectedTime(slot.time)} className={`p-3 rounded-lg border text-sm text-left transition-all ${selectedTime === slot.time ? "border-primary bg-secondary text-primary font-medium" : "border-border bg-card text-foreground hover:border-primary/40"}`}>
-                              <div className="flex items-center justify-between"><span>{slot.time}</span><Clock className="h-3 w-3 text-muted-foreground" /></div>
-                            </button>
-                          ))}
-                        </div>
+                        <div className="space-y-2">
+  <Label className="text-sm font-medium">Time Slot</Label>
+  <div className="relative">
+    {/* If you have the Clock icon imported from lucide-react, it adds a nice touch */}
+    <Clock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
+    
+    <select 
+      className="w-full h-10 rounded-md border border-input bg-background pl-9 pr-3 text-sm text-foreground focus:ring-2 focus:ring-primary outline-none appearance-none"
+      value={selectedTime} // Change this to your actual state variable! e.g., formData.time
+      onChange={(e) => setSelectedTime(e.target.value)} // Change this to your actual setter!
+      required
+    >
+      <option value="" disabled>Select a 15-minute slot...</option>
+      {timeSlots.map(slot => (
+        <option key={slot} value={slot}>
+          {slot}
+        </option>
+      ))}
+    </select>
+  </div>
+</div>
                       </div>
 
                       <div className="space-y-4 pt-4 border-t border-border mt-4">

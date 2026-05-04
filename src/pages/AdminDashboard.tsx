@@ -21,6 +21,7 @@ const navItems = [
   { title: "Bed Management", url: "/admin/beds", icon: BedDouble },
   { title: "Directory", url: "/admin/directory", icon: Users },
   { title: "Global Records", url: "/admin/records", icon: Database },
+  { title: "AI Optimizer", url: "/admin/optimization", icon: Activity },
 ];
 
 const dummyDoctors = [
@@ -41,7 +42,7 @@ const allDepartments = ["Cardiology", "General Medicine", "Orthopedics", "Dermat
 const AdminDashboard = () => {
   const location = useLocation();
   const navigate = useNavigate();
-  const [activeTab, setActiveTab] = useState<"overview" | "triage" | "beds" | "directory" | "records" | "lookup">("overview");
+  const [activeTab, setActiveTab] = useState<"overview" | "triage" | "beds" | "directory" | "records" | "lookup" | "optimization">("overview");
   
   // --- EXISTING STATES ---
   const [beds, setBeds] = useState<any[]>([]); 
@@ -75,6 +76,12 @@ const AdminDashboard = () => {
   // --- PHASE 4: LIVE PRIORITY QUEUE STATES ---
   const [liveQueue, setLiveQueue] = useState<any[]>([]);
   const [isQueueLoading, setIsQueueLoading] = useState(false);
+
+  // --- PHASE 6: OPTIMIZATION STATES ---
+  const [optDoctorId, setOptDoctorId] = useState<string>("1");
+  const [optDate, setOptDate] = useState<string>(new Date().toISOString().split("T")[0]);
+  const [isOptimizing, setIsOptimizing] = useState(false);
+  const [optResults, setOptResults] = useState<any>(null);
 
   // Fetch ML Appointments
   const fetchAppointments = async () => {
@@ -197,6 +204,8 @@ const AdminDashboard = () => {
       setActiveTab("records");
     } else if (path.includes("/lookup")) {
       setActiveTab("lookup");
+    } else if (path.includes("/optimization")) {
+      setActiveTab("optimization");
     } else {
       setActiveTab("overview");
     }
@@ -327,6 +336,42 @@ const AdminDashboard = () => {
     }
   };
 
+  // --- PHASE 6: TRIGGER ANNEALING OPTIMIZATION ---
+  const handleOptimize = async () => {
+    if (!optDoctorId || !optDate) {
+      toast.error("Please select a doctor and a date.");
+      return;
+    }
+
+    setIsOptimizing(true);
+    setOptResults(null);
+
+    try {
+      const API_BASE = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
+      // Hit the Phase 6 Endpoint!
+      const res = await fetch(`${API_BASE}/api/appointments/optimize/${optDoctorId}/${optDate}`, {
+        method: "POST"
+      });
+      const data = await res.json();
+
+      if (data.status === "success") {
+        if (data.data === null) {
+          toast.warning(data.message); 
+        } else {
+          setOptResults(data);
+          toast.success("Schedule Successfully Optimized!");
+        }
+      } else {
+        toast.error("Optimization failed.");
+      }
+    } catch (err) {
+      console.error(err);
+      toast.error("Network error while optimizing.");
+    } finally {
+      setIsOptimizing(false);
+    }
+  };
+
   const filteredDoctors = doctors.filter(d => (selectedDept === "All" || d.dept === selectedDept) && d.name.toLowerCase().includes(searchDir.toLowerCase()));
   const matchingPatients = patients.filter(p => p.phone.includes(lookupPhone));
 
@@ -377,6 +422,7 @@ const AdminDashboard = () => {
             { key: "directory" as const, label: "Master Directory", icon: Users, path: "/admin/directory" },
             { key: "records" as const, label: "Global Records", icon: Database, path: "/admin/records" },
             { key: "lookup" as const, label: "Patient Lookup", icon: Phone, path: "/admin/lookup" },
+            { key: "optimization" as const, label: "AI Optimizer", icon: Activity, path: "/admin/optimization" },
           ].map((tab) => (
             <button
               key={tab.key}
@@ -1026,6 +1072,84 @@ const AdminDashboard = () => {
                 </table>
               </div>
             </Card>
+          </motion.div>
+        )}
+
+        {/* --- PHASE 6: AI OPTIMIZER TAB --- */}
+        {activeTab === "optimization" && (
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6">
+            
+            <Card className="border-border shadow-sm border-t-4 border-t-accent">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Brain className="h-5 w-5 text-accent" />
+                  Simulated Annealing Optimizer
+                </CardTitle>
+                <p className="text-sm text-muted-foreground">
+                  The AI will analyze the confirmed schedule, run Monte Carlo simulations, and rearrange appointment sequences within 30-minute blocks to minimize wait times.
+                </p>
+              </CardHeader>
+              <CardContent className="space-y-6">
+                
+                {/* Controls */}
+                <div className="flex flex-col md:flex-row gap-4">
+                  <div className="flex-1 space-y-2">
+                    <Label>Select Doctor to Optimize</Label>
+                    <select 
+                      className="w-full h-10 rounded-md border border-input bg-background px-3 text-sm"
+                      value={optDoctorId}
+                      onChange={(e) => setOptDoctorId(e.target.value)}
+                    >
+                      {doctors.map(d => (
+                        <option key={d.id} value={d.id}>Dr. {d.name} ({d.dept})</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="flex-1 space-y-2">
+                    <Label>Target Date</Label>
+                    <Input 
+                      type="date" 
+                      value={optDate} 
+                      onChange={(e) => setOptDate(e.target.value)} 
+                    />
+                  </div>
+                  <div className="flex items-end">
+                    <Button 
+                      onClick={handleOptimize} 
+                      disabled={isOptimizing}
+                      className="w-full md:w-auto px-8 bg-accent hover:bg-accent/90"
+                    >
+                      {isOptimizing ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : "Run Optimizer"}
+                    </Button>
+                  </div>
+                </div>
+
+                {/* Loading State */}
+                {isOptimizing && (
+                  <div className="p-12 text-center text-muted-foreground animate-pulse">
+                    <Brain className="h-12 w-12 mx-auto mb-4 text-accent opacity-50 animate-bounce" />
+                    <p className="font-bold">Simulating Thousands of Schedules...</p>
+                    <p className="text-xs mt-2">Running Simulated Annealing Algorithm...</p>
+                  </div>
+                )}
+
+                {/* Success Results */}
+                {optResults && !isOptimizing && (
+                  <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="mt-6 p-6 bg-success/10 border border-success/30 rounded-lg text-center">
+                    <Check className="h-10 w-10 mx-auto text-success mb-2" />
+                    <h3 className="text-xl font-bold text-success mb-1">Optimization Complete!</h3>
+                    <p className="text-sm text-foreground mb-4">{optResults.message}</p>
+                    <div className="inline-block bg-background px-4 py-2 rounded-md shadow-sm border">
+                      <p className="text-xs text-muted-foreground uppercase tracking-wider">Final Cost Score</p>
+                      <p className="text-2xl font-bold">{optResults.final_cost_score}</p>
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-4">Database has been updated with the new sequence.</p>
+                  </motion.div>
+                )}
+
+              </CardContent>
+            </Card>
+
           </motion.div>
         )}
       </div>

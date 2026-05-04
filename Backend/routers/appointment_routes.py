@@ -8,6 +8,7 @@ import joblib  # ML Brain
 import numpy as np  # ML Math
 from dotenv import load_dotenv
 from datetime import datetime
+from optimizer import ScheduleOptimizer
 
 # Import Phase 2 Triage Logic
 from triage_engine import extract_text, calculate_dynamic_priority
@@ -272,7 +273,31 @@ def cancel_appointment(appointment_id: int):
     finally:
         if cursor: cursor.close()
         if conn: conn.close()
-
+# ==========================================
+# COMPLETE APPOINTMENT ROUTE (Doctor Dashboard)
+# ==========================================
+@router.put("/{appointment_id}/complete")
+def complete_appointment(appointment_id: int):
+    """Marks an appointment as completed from the Doctor Dashboard."""
+    conn = None
+    cursor = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Update the status to 'completed'
+        query = "UPDATE appointments SET status = 'completed' WHERE appointment_id = %s"
+        cursor.execute(query, (appointment_id,))
+        conn.commit()
+        
+        return {"status": "success", "message": "Appointment marked as completed!"}
+    except Exception as e:
+        print(f"🔥 Error completing appointment: {e}")
+        if conn: conn.rollback()
+        raise HTTPException(status_code=500, detail="Failed to complete appointment")
+    finally:
+        if cursor: cursor.close()
+        if conn: conn.close()
 # ==========================================
 # UPDATE APPOINTMENT STATUS (Admin Confirm/Reschedule)
 # ==========================================
@@ -511,6 +536,88 @@ def run_monte_carlo_simulation(doctor_id: str, date_string: str):
 
     except Exception as e:
         print(f"🔥 Error running simulation: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if cursor: cursor.close()
+        if conn: conn.close()
+
+# ==========================================
+# PHASE 6: SIMULATED ANNEALING OPTIMIZER
+# ==========================================
+
+@router.post("/optimize/{doctor_id}/{date_string}")
+def optimize_doctor_schedule(doctor_id: str, date_string: str):
+    """
+    Runs Simulated Annealing to find the mathematically perfect order 
+    for tomorrow's appointments.
+    """
+    conn = None
+    cursor = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # 1. Fetch tomorrow's appointments
+        query = """
+            SELECT appointment_id, appointment_time, priority_score, no_show_risk
+            FROM appointments
+            WHERE doctor_id = %s 
+            AND DATE(appointment_time) = %s
+            AND status IN ('scheduled', 'confirmed')
+        """
+        cursor.execute(query, (doctor_id, date_string))
+        appointments = cursor.fetchall()
+        
+        if len(appointments) < 2:
+            return {"status": "success", "message": "Not enough appointments to optimize.", "data": None}
+
+        # 2. Format the data for the Optimizer
+        schedule_data = []
+        for apt in appointments:
+            dt = apt['appointment_time']
+            scheduled_minute = (dt.hour * 60) + dt.minute 
+            
+            schedule_data.append({
+                'id': apt['appointment_id'],
+                'scheduled_minute': scheduled_minute,
+                'base_priority': apt['priority_score'] or 1,
+                'no_show_risk': float(apt['no_show_risk'] or 0.0),
+                'original_dt': dt # Keep this so we can update the DB later
+            })
+
+        # 3. Run the AI Optimizer!
+        optimizer = ScheduleOptimizer(schedule_data, max_iterations=100)
+        result = optimizer.run_optimization()
+        
+        best_schedule = result['optimized_schedule']
+
+        # 4. Save the optimized times back to the Database
+        update_query = """
+            UPDATE appointments 
+            SET appointment_time = %s 
+            WHERE appointment_id = %s
+        """
+        
+        for patient in best_schedule:
+            # Reconstruct the datetime object from the new scheduled_minute
+            old_dt = patient['original_dt']
+            new_hour = patient['scheduled_minute'] // 60
+            new_minute = patient['scheduled_minute'] % 60
+            new_dt = old_dt.replace(hour=new_hour, minute=new_minute)
+            
+            cursor.execute(update_query, (new_dt, patient['id']))
+            
+        conn.commit()
+
+        return {
+            "status": "success",
+            "message": "Schedule optimized perfectly!",
+            "final_cost_score": result['final_cost']
+        }
+
+    except Exception as e:
+        print(f"🔥 Error optimizing schedule: {e}")
+        if conn: conn.rollback()
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         if cursor: cursor.close()
