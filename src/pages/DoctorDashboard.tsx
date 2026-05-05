@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { motion } from "framer-motion";
-import { Users, Clock, CheckCircle, Phone, CalendarHeart, Calendar as CalendarIcon, Droplet, Settings, User, Building, Loader2 } from "lucide-react";
+import { Users, Clock, CheckCircle, Phone, CalendarHeart, Calendar as CalendarIcon, Droplet, Settings, User, Building, Loader2, Activity, ArrowRightCircle } from "lucide-react";
 import DashboardLayout from "@/components/DashboardLayout";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -16,6 +16,10 @@ const DoctorDashboard = () => {
   
   const [activeTab, setActiveTab] = useState<"appointments" | "settings">("appointments");
   const [appointments, setAppointments] = useState<any[]>([]);
+  
+  // --- NEW STATE: Live Queue Data ---
+  const [liveQueue, setLiveQueue] = useState<any[]>([]);
+  
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
 
@@ -28,7 +32,7 @@ const DoctorDashboard = () => {
 
   const API_BASE = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 
-  // 2. Fetch specific doctor's schedule using their Firebase UID
+  // 2. Fetch specific doctor's schedule (Confirmed & Completed)
   const fetchAppointments = async () => {
     if (!currentUser) return;
     setIsLoading(true);
@@ -45,6 +49,26 @@ const DoctorDashboard = () => {
       setIsLoading(false);
     }
   };
+
+  // --- NEW: Fetch only patients currently waiting in the hospital ---
+  // --- FIXED: Fetch only THIS DOCTOR'S patients currently waiting in the hospital ---
+  const fetchLiveQueue = async () => {
+    // 1. We must ensure we have the user's ID before making the request
+    if (!currentUser) return; 
+    
+    try {
+      // 2. Hit the new, secure endpoint using the doctor's specific UID
+      const res = await fetch(`${API_BASE}/api/appointments/doctor/${currentUser.uid}/live-queue`);
+      const data = await res.json();
+      
+      if (data.status === "success") {
+        setLiveQueue(data.data);
+      }
+    } catch (err) {
+      console.error("Failed to fetch live queue", err);
+    }
+  };
+
 
   // Fetch Doctor's Profile to pre-fill settings and get their name
   const fetchProfile = async () => {
@@ -67,36 +91,59 @@ const DoctorDashboard = () => {
   useEffect(() => {
     if (currentUser) {
       fetchAppointments();
-      fetchProfile(); // <-- Now we fetch their profile on load too!
+      fetchLiveQueue();
+      fetchProfile(); 
+      
+      // Auto-refresh the live queue every 30 seconds
+      const intervalId = setInterval(() => {
+        fetchLiveQueue();
+      }, 30000);
+      
+      return () => clearInterval(intervalId);
     }
   }, [currentUser]);
 
-  const handleComplete = async (appointmentId) => {
-  try {
-    const API_BASE = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
-    const res = await fetch(`${API_BASE}/api/appointments/${appointmentId}/complete`, {
-      method: "PUT"
-    });
-    
-    if (res.ok) {
-      toast.success("Appointment marked as completed!");
+  // --- NEW: Call Next Patient Action ---
+  const handleCallPatient = async (appointmentId: number) => {
+    try {
+      // Create a PUT request to update status to 'in_consultation'
+      const res = await fetch(`${API_BASE}/api/appointments/${appointmentId}/consult`, {
+        method: "PUT"
+      });
       
-      // THE FIX: Instantly remove the card from the screen by filtering the state!
-      // (Make sure 'setAppointments' matches whatever your state variable is called)
-      setAppointments((prevAppointments) => 
-        prevAppointments.filter((apt) => apt.appointment_id !== appointmentId)
-      );
-      
-    } else {
-      toast.error("Failed to complete appointment.");
+      if (res.ok) {
+        toast.success("Patient called! They are moving to your office.");
+        fetchLiveQueue(); // Refresh waiting room
+        fetchAppointments(); // Refresh schedule
+      } else {
+        toast.error("Failed to call patient.");
+      }
+    } catch (error) {
+      console.error("Error calling patient:", error);
+      toast.error("Network error.");
     }
-  } catch (error) {
-    console.error("Error completing appointment:", error);
-    toast.error("Network error.");
-  }
-};
+  };
 
-  // 3. Save Profile Info
+  const handleComplete = async (appointmentId: number) => {
+    try {
+      const res = await fetch(`${API_BASE}/api/appointments/${appointmentId}/complete`, {
+        method: "PUT"
+      });
+      
+      if (res.ok) {
+        toast.success("Appointment marked as completed!");
+        setAppointments((prevAppointments) => 
+          prevAppointments.filter((apt) => apt.appointment_id !== appointmentId)
+        );
+      } else {
+        toast.error("Failed to complete appointment.");
+      }
+    } catch (error) {
+      console.error("Error completing appointment:", error);
+      toast.error("Network error.");
+    }
+  };
+
   const handleSaveProfile = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentUser) return;
@@ -168,74 +215,127 @@ const DoctorDashboard = () => {
           </button>
         </div>
 
-        {/* APPOINTMENTS TIMELINE VIEW */}
+        {/* APPOINTMENTS VIEW */}
         {activeTab === "appointments" && (
-          <div className="grid gap-6 mt-4">
-            <div className="flex items-center gap-2 border-b border-border pb-2">
-              <CalendarIcon className="h-5 w-5 text-primary" />
-              <h2 className="text-xl font-semibold">Today's Consultations</h2>
-            </div>
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mt-4">
+            
+            {/* LEFT COLUMN: The Timeline */}
+            <div className="lg:col-span-2 space-y-6">
+              <div className="flex items-center gap-2 border-b border-border pb-2">
+                <CalendarIcon className="h-5 w-5 text-primary" />
+                <h2 className="text-xl font-semibold">Today's Consultations</h2>
+              </div>
 
-            {isLoading ? (
-              <div className="flex justify-center py-12"><Loader2 className="h-8 w-8 animate-spin text-primary" /></div>
-            ) : appointments.length === 0 ? (
-              <Card className="border-border border-dashed bg-muted/30">
-                <CardContent className="flex flex-col items-center justify-center py-16 text-center">
-                  <CheckCircle className="h-12 w-12 text-success/50 mb-4" />
-                  <h3 className="text-xl font-display font-bold text-foreground mb-2">Schedule is clear!</h3>
-                  <p className="text-muted-foreground">You have no pending appointments right now.</p>
-                </CardContent>
-              </Card>
-            ) : (
-              <div className="space-y-6 relative before:absolute before:inset-0 before:ml-5 before:-translate-x-px md:before:mx-auto md:before:translate-x-0 before:h-full before:w-0.5 before:bg-gradient-to-b before:from-transparent before:via-border before:to-transparent">
-                {appointments.map((apt) => (
-                  <div key={apt.appointment_id} className="relative flex items-center justify-between md:justify-normal md:odd:flex-row-reverse group is-active">
-                    
-                    {/* Timeline Icon */}
-                    <div className={`flex items-center justify-center w-10 h-10 rounded-full border-4 border-background shadow shrink-0 md:order-1 md:group-odd:-translate-x-1/2 md:group-even:translate-x-1/2 z-10 ${apt.is_overbooked ? 'bg-warning/20 text-warning' : 'bg-primary/20 text-primary'}`}>
-                      <Clock className="h-4 w-4" />
-                    </div>
+              {isLoading ? (
+                <div className="flex justify-center py-12"><Loader2 className="h-8 w-8 animate-spin text-primary" /></div>
+              ) : appointments.length === 0 ? (
+                <Card className="border-border border-dashed bg-muted/30">
+                  <CardContent className="flex flex-col items-center justify-center py-16 text-center">
+                    <CheckCircle className="h-12 w-12 text-success/50 mb-4" />
+                    <h3 className="text-xl font-display font-bold text-foreground mb-2">Schedule is clear!</h3>
+                    <p className="text-muted-foreground">You have no pending appointments right now.</p>
+                  </CardContent>
+                </Card>
+              ) : (
+                <div className="space-y-6 relative before:absolute before:inset-0 before:ml-5 before:-translate-x-px md:before:mx-auto md:before:translate-x-0 before:h-full before:w-0.5 before:bg-gradient-to-b before:from-transparent before:via-border before:to-transparent">
+                  {appointments.map((apt) => (
+                    <div key={apt.appointment_id} className="relative flex items-center justify-between md:justify-normal md:odd:flex-row-reverse group is-active">
+                      
+                      {/* Timeline Icon */}
+                      <div className={`flex items-center justify-center w-10 h-10 rounded-full border-4 border-background shadow shrink-0 md:order-1 md:group-odd:-translate-x-1/2 md:group-even:translate-x-1/2 z-10 ${apt.is_overbooked ? 'bg-warning/20 text-warning' : 'bg-primary/20 text-primary'}`}>
+                        <Clock className="h-4 w-4" />
+                      </div>
 
-                    {/* Appointment Card */}
-                    <Card className={`w-[calc(100%-3rem)] md:w-[calc(50%-2.5rem)] border-border transition-all hover:shadow-md ${apt.is_overbooked ? 'ring-1 ring-warning/50 border-warning/30' : ''}`}>
-                      <CardHeader className={`p-4 pb-3 flex flex-row items-center justify-between border-b bg-muted/20 ${apt.is_overbooked ? 'border-warning/20' : 'border-border/50'}`}>
-                         <div className="font-semibold text-foreground flex items-center gap-2">
-                            <Clock className="h-4 w-4 text-muted-foreground" />
-                            {apt.appointment_time}
-                         </div>
-                         {apt.is_overbooked && <Badge variant="warning" className="text-[10px] h-5 bg-warning/10 text-warning border-warning/20">Double Booked</Badge>}
-                      </CardHeader>
-                      <CardContent className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                        <div>
-                          <h3 className="font-bold text-lg text-foreground">{apt.patient_name}</h3>
-                          
-                          <div className="flex flex-wrap items-center gap-4 mt-2">
-                            {/* Phone Number */}
-                            <div className="flex items-center gap-1.5 text-sm text-muted-foreground">
-                              <Phone className="h-3.5 w-3.5" /> {apt.phone || "Not Provided"}
-                            </div>
+                      {/* Appointment Card */}
+                      <Card className={`w-[calc(100%-3rem)] md:w-[calc(50%-2.5rem)] border-border transition-all hover:shadow-md ${apt.is_overbooked ? 'ring-1 ring-warning/50 border-warning/30' : ''}`}>
+                        <CardHeader className={`p-4 pb-3 flex flex-row items-center justify-between border-b bg-muted/20 ${apt.is_overbooked ? 'border-warning/20' : 'border-border/50'}`}>
+                           <div className="font-semibold text-foreground flex items-center gap-2">
+                              <Clock className="h-4 w-4 text-muted-foreground" />
+                              {apt.appointment_time}
+                           </div>
+                           {apt.is_overbooked && <Badge variant="warning" className="text-[10px] h-5 bg-warning/10 text-warning border-warning/20">Double Booked</Badge>}
+                        </CardHeader>
+                        <CardContent className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                          <div>
+                            <h3 className="font-bold text-lg text-foreground">{apt.patient_name}</h3>
                             
-                            {/* Blood Group Display */}
-                            <div className="flex items-center gap-1.5 text-sm text-muted-foreground">
-                              <Droplet className="h-3.5 w-3.5 text-red-500" />
-                              {apt.blood_group && apt.blood_group !== "Not Recorded" ? (
-                                <span className="font-medium text-foreground">{apt.blood_group}</span>
-                              ) : (
-                                <span className="text-destructive font-medium italic text-xs">Not Recorded</span>
-                              )}
+                            <div className="flex flex-wrap items-center gap-4 mt-2">
+                              <div className="flex items-center gap-1.5 text-sm text-muted-foreground">
+                                <Phone className="h-3.5 w-3.5" /> {apt.phone || "Not Provided"}
+                              </div>
+                              <div className="flex items-center gap-1.5 text-sm text-muted-foreground">
+                                <Droplet className="h-3.5 w-3.5 text-red-500" />
+                                {apt.blood_group && apt.blood_group !== "Not Recorded" ? (
+                                  <span className="font-medium text-foreground">{apt.blood_group}</span>
+                                ) : (
+                                  <span className="text-destructive font-medium italic text-xs">Not Recorded</span>
+                                )}
+                              </div>
                             </div>
                           </div>
+                          <Button onClick={() => handleComplete(apt.appointment_id)} className="w-full sm:w-auto mt-auto" variant={apt.is_overbooked ? "outline" : "default"}>
+                            <CheckCircle className="h-4 w-4 mr-2" /> Complete
+                          </Button>
+                        </CardContent>
+                      </Card>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
 
-                        </div>
-                        <Button onClick={() => handleComplete(apt.appointment_id)} className="w-full sm:w-auto mt-auto" variant={apt.is_overbooked ? "outline" : "default"}>
-                          <CheckCircle className="h-4 w-4 mr-2" /> Complete
-                        </Button>
-                      </CardContent>
-                    </Card>
-                  </div>
-                ))}
+            {/* RIGHT COLUMN: Live Priority Queue */}
+            <div className="space-y-6">
+              <div className="flex items-center gap-2 border-b border-border pb-2">
+                <Activity className="h-5 w-5 text-primary" />
+                <h2 className="text-xl font-semibold">Live Waiting Room</h2>
               </div>
-            )}
+              
+              <Card className="border-border shadow-sm border-t-4 border-t-primary">
+                <CardHeader className="pb-3 bg-muted/30">
+                  <CardTitle className="text-sm">Patients Currently Waiting</CardTitle>
+                  <p className="text-xs text-muted-foreground">Ranked by Effective Priority</p>
+                </CardHeader>
+                <CardContent className="p-0">
+                  <div className="divide-y divide-border">
+                    {liveQueue.length === 0 ? (
+                       <div className="p-6 text-center text-sm text-muted-foreground">
+                         No patients are currently in the waiting room.
+                       </div>
+                    ) : (
+                      liveQueue.map((patient, index) => (
+                        <div key={patient.appointment_id} className="p-4 hover:bg-muted/20 transition-colors flex flex-col gap-3">
+                          <div className="flex justify-between items-start">
+                            <div>
+                              <div className="flex items-center gap-2">
+                                <span className="font-bold text-foreground">{patient.patient_name}</span>
+                                {index === 0 && <Badge className="bg-primary/20 text-primary border-primary/30 text-[10px] h-5">Next</Badge>}
+                              </div>
+                              <div className="text-xs text-muted-foreground mt-1">
+                                Wait Time: <span className="text-warning font-medium">{patient.wait_time_minutes} mins</span>
+                              </div>
+                            </div>
+                            <div className="text-right">
+                              <div className="text-xs text-muted-foreground uppercase tracking-wider">Priority</div>
+                              <div className="text-xl font-bold text-primary">{patient.effective_priority}</div>
+                            </div>
+                          </div>
+                          
+                          <Button 
+                            size="sm" 
+                            className="w-full bg-accent hover:bg-accent/90 text-white"
+                            onClick={() => handleCallPatient(patient.appointment_id)}
+                          >
+                            Call Patient to Office <ArrowRightCircle className="h-4 w-4 ml-2" />
+                          </Button>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+            
           </div>
         )}
 

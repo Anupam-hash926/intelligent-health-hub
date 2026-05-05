@@ -38,9 +38,8 @@ def get_db_connection():
 
 
 # ==========================================
-# PHASE 4: LIVE PRIORITY QUEUE & RECEPTIONIST
+# PHASE 4: LIVE PRIORITY QUEUE & RECEPTIONIST (GLOBAL/ADMIN)
 # ==========================================
-
 @router.put("/{appointment_id}/arrive")
 def mark_patient_arrived(appointment_id: int):
     """Marks a patient as physically present using exact server time."""
@@ -73,7 +72,7 @@ def mark_patient_arrived(appointment_id: int):
 
 @router.get("/live-queue")
 def get_live_priority_queue():
-    """Calculates effective priority dynamically based on wait time."""
+    """Calculates effective priority dynamically based on wait time for the Admin Dashboard."""
     conn = None
     cursor = None
     try:
@@ -273,6 +272,33 @@ def cancel_appointment(appointment_id: int):
     finally:
         if cursor: cursor.close()
         if conn: conn.close()
+
+# ==========================================
+# PHASE 7: CALL PATIENT ROUTE (Doctor Dashboard)
+# ==========================================
+@router.put("/{appointment_id}/consult")
+def consult_appointment(appointment_id: int):
+    """Marks an appointment as 'in_consultation', pulling them from the waiting room."""
+    conn = None
+    cursor = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Update the status to 'in_consultation'
+        query = "UPDATE appointments SET status = 'in_consultation' WHERE appointment_id = %s"
+        cursor.execute(query, (appointment_id,))
+        conn.commit()
+        
+        return {"status": "success", "message": "Patient moved to consultation!"}
+    except Exception as e:
+        print(f"🔥 Error calling patient: {e}")
+        if conn: conn.rollback()
+        raise HTTPException(status_code=500, detail="Failed to call patient")
+    finally:
+        if cursor: cursor.close()
+        if conn: conn.close()
+
 # ==========================================
 # COMPLETE APPOINTMENT ROUTE (Doctor Dashboard)
 # ==========================================
@@ -298,6 +324,7 @@ def complete_appointment(appointment_id: int):
     finally:
         if cursor: cursor.close()
         if conn: conn.close()
+
 # ==========================================
 # UPDATE APPOINTMENT STATUS (Admin Confirm/Reschedule)
 # ==========================================
@@ -371,6 +398,67 @@ def get_patient_appointments(patient_id: str):
     except Exception as e:
         print(f"🔥 Error fetching history: {e}")
         return {"status": "error", "data": []}
+    finally:
+        if cursor: cursor.close()
+        if conn: conn.close()
+
+# ==========================================
+# GET SPECIFIC DOCTOR'S LIVE WAITING ROOM
+# ==========================================
+@router.get("/doctor/{uid}/live-queue")
+def get_doctor_live_queue(uid: str):
+    """Fetches the live priority queue ONLY for a specific doctor based on their Firebase UID."""
+    conn = None
+    cursor = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # JOIN the doctors and users tables to filter by the Firebase UID
+        query = """
+            SELECT a.appointment_id, a.patient_id, COALESCE(p.full_name, 'Unknown') as patient_name, 
+                   a.doctor_id, a.priority_score as base_priority, a.entry_time
+            FROM appointments a
+            JOIN doctors d ON a.doctor_id::VARCHAR = d.doctor_id::VARCHAR
+            JOIN users u ON u.email = d.email
+            LEFT JOIN patient_profiles p ON a.patient_id = p.uid
+            WHERE a.status = 'entered_hospital' AND u.uid = %s
+        """
+        cursor.execute(query, (uid,))
+        waiting_patients = cursor.fetchall()
+
+        now = datetime.now()
+        queue_response = []
+
+        for patient in waiting_patients:
+            entry_time = patient['entry_time']
+            wait_time_minutes = 0
+            effective_priority = patient['base_priority'] or 1
+
+            if entry_time:
+                safe_entry_time = entry_time.replace(tzinfo=None)
+                wait_time_delta = now - safe_entry_time
+                wait_time_minutes = int(wait_time_delta.total_seconds() / 60)
+                wait_time_minutes = max(0, wait_time_minutes)
+                effective_priority = effective_priority + (wait_time_minutes * 0.1)
+
+            patient_data = dict(patient)
+            patient_data['wait_time_minutes'] = wait_time_minutes
+            patient_data['effective_priority'] = round(effective_priority, 2)
+            
+            if patient_data['entry_time']:
+                patient_data['entry_time'] = safe_entry_time.isoformat()
+            
+            queue_response.append(patient_data)
+
+        # Sort by highest effective priority first
+        queue_response.sort(key=lambda x: (x['effective_priority'], x['wait_time_minutes']), reverse=True)
+
+        return {"status": "success", "data": queue_response}
+
+    except Exception as e:
+        print(f"🔥 Error fetching doctor live queue: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
     finally:
         if cursor: cursor.close()
         if conn: conn.close()
@@ -544,7 +632,6 @@ def run_monte_carlo_simulation(doctor_id: str, date_string: str):
 # ==========================================
 # PHASE 6: SIMULATED ANNEALING OPTIMIZER
 # ==========================================
-
 @router.post("/optimize/{doctor_id}/{date_string}")
 def optimize_doctor_schedule(doctor_id: str, date_string: str):
     """
